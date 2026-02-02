@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  # Registry services
+  flatpak-registry:
+    build: ./registries/flatpak
+    container_name: flatpak-registry
+    ports:
+      - "8080:8080"
+    networks:
+      - default
+
+  snap-registry:
+    build: ./registries/snap
+    container_name: snap-registry
+    ports:
+      - "8081:8081"
+    networks:
+      - default
+
+  deb-registry:
+    build: ./registries/deb
+    container_name: deb-registry
+    ports:
+      - "8082:8082"
+    networks:
+      - default
+
+  rpm-registry:
+    build: ./registries/rpm
+    container_name: rpm-registry
+    ports:
+      - "8083:8083"
+    networks:
+      - default
+
+  # Consumer services
+  consumer-arch:
+    build:
+      context: consumers
+      dockerfile: arch-flatpak/Dockerfile
+    container_name: consumer-arch
+    depends_on:
+      - flatpak-registry
+    ports:
+      - "9001:9000"
+    privileged: true  # Required for flatpak/bwrap user namespaces
+    networks:
+      - default
+
+  consumer-debian:
+    build:
+      context: consumers
+      dockerfile: debian-apt/Dockerfile
+    container_name: consumer-debian
+    depends_on:
+      - deb-registry
+    ports:
+      - "9003:9000"
+    networks:
+      - default
+
+  consumer-redhat:
+    build:
+      context: consumers
+      dockerfile: redhat-rpm/Dockerfile
+    container_name: consumer-redhat
+    depends_on:
+      - rpm-registry
+    ports:
+      - "9004:9000"
+    networks:
+      - default
+
+  # Builder service
+  builder:
+    build: ./builder
+    container_name: builder
+    depends_on:
+      - flatpak-registry
+      - snap-registry
+      - deb-registry
+      - rpm-registry
+      - consumer-arch
+      - consumer-debian
+      - consumer-redhat
+    volumes:
+      - ./app:/build
+    ports:
+      - "9999:9999"
+    networks:
+      - default
+
+networks:
+  default:
+    external: true
+    name: podman-build-network

@@ -1,0 +1,54 @@
+---
+- name: Bake snap-consumer VM image
+  hosts: localhost
+  connection: local
+  vars_files:
+    - ../vars/vm-config.yml
+
+  tasks:
+    - name: Check VM is running and healthy
+      uri:
+        url: "http://localhost:{{ vm_trigger_host_port }}/health"
+        return_content: yes
+      register: health
+      failed_when: "'OK' not in health.content"
+
+    - name: Stop the VM gracefully
+      shell: |
+        if [ -f /tmp/{{ vm_name }}.pid ]; then
+          kill $(cat /tmp/{{ vm_name }}.pid) 2>/dev/null || true
+          sleep 3
+        fi
+      ignore_errors: yes
+
+    - name: Wait for VM to stop
+      wait_for:
+        path: "/tmp/{{ vm_name }}.pid"
+        state: absent
+        timeout: 30
+      ignore_errors: yes
+
+    - name: Clean up stale PID file
+      file:
+        path: "/tmp/{{ vm_name }}.pid"
+        state: absent
+
+    - name: Create baked image (flatten qcow2)
+      command: >
+        qemu-img convert -O qcow2
+        {{ playbook_dir }}/../../vm/disks/{{ vm_name }}.qcow2
+        {{ playbook_dir }}/../../vm/disks/{{ vm_name }}-baked.qcow2
+      args:
+        creates: "{{ playbook_dir }}/../../vm/disks/{{ vm_name }}-baked.qcow2"
+
+    - name: Record bake timestamp
+      copy:
+        content: "{{ ansible_date_time.iso8601 }}\n"
+        dest: "{{ playbook_dir }}/../../vm/disks/{{ vm_name }}-baked.timestamp"
+
+    - name: Display success message
+      debug:
+        msg: |
+          Baked image created successfully!
+          Image: vm/disks/{{ vm_name }}-baked.qcow2
+          Use './scripts/vm-ctl.sh reset' for instant clean state resets

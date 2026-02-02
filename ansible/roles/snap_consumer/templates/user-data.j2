@@ -1,0 +1,181 @@
+#cloud-config
+hostname: {{ vm_name }}
+
+users:
+  - name: {{ vm_user }}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - {{ lookup('file', playbook_dir + '/../../vm/ssh/id_ed25519.pub') }}
+
+package_update: true
+packages:
+  - snapd
+  - python3
+  - curl
+
+bootcmd:
+  - echo "=== VM BOOT START ===" > /dev/ttyS0
+
+runcmd:
+  - echo "[cloud-init] Starting snap setup..." > /dev/ttyS0
+  # Enable and start snapd
+  - systemctl enable --now snapd.socket
+  - echo "[cloud-init] snapd socket enabled" > /dev/ttyS0
+  - systemctl enable --now snapd.service
+  - echo "[cloud-init] snapd service enabled" > /dev/ttyS0
+  - snap wait system seed.loaded
+  - echo "[cloud-init] snap seed loaded" > /dev/ttyS0
+
+  # Create consumer directory
+  - mkdir -p /opt/snap-consumer
+
+  # Create environment file
+  - |
+    cat > /opt/snap-consumer/consumer.env << 'EOF'
+    CONSUMER_NAME=consumer-ubuntu
+    BUILDER_URL={{ builder_url }}
+    SNAP_REGISTRY_URL={{ snap_registry_url }}
+    EOF
+
+  # Create install script
+  - |
+    cat > /opt/snap-consumer/install.sh << 'EOF'
+    #!/bin/bash
+    set -e
+    source /opt/snap-consumer/consumer.env
+    echo "[consumer-ubuntu] Downloading snap from $SNAP_REGISTRY_URL..."
+    curl -o /tmp/access-keys.snap $SNAP_REGISTRY_URL/snaps/access-keys_0.1.0_amd64.snap
+    echo "[consumer-ubuntu] Installing snap..."
+    snap install --dangerous --devmode /tmp/access-keys.snap
+    export PATH="/snap/bin:$PATH"
+    echo "[consumer-ubuntu] Installation complete"
+    EOF
+  - chmod +x /opt/snap-consumer/install.sh
+
+  # Create test runner (same as container version)
+  - |
+    cat > /opt/snap-consumer/test-runner.py << 'PYTEST'
+    #!/usr/bin/env python3
+    import subprocess
+    import json
+    import os
+    import sys
+
+    def run_test():
+        consumer = os.environ.get('CONSUMER_NAME', 'consumer-ubuntu')
+        try:
+            result = subprocess.run(
+                ['access-keys'],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={**os.environ, 'PATH': '/snap/bin:' + os.environ.get('PATH', '')}
+            )
+            if result.returncode == 0 and 'All good' in result.stdout:
+                return {'consumer': consumer, 'status': 'pass', 'output': result.stdout.strip(), 'error': ''}
+            else:
+                return {'consumer': consumer, 'status': 'fail', 'output': result.stdout.strip(),
+                        'error': f'Exit code: {result.returncode}, stderr: {result.stderr.strip()}'}
+        except subprocess.TimeoutExpired:
+            return {'consumer': consumer, 'status': 'error', 'output': '', 'error': 'Timeout after 30s'}
+        except FileNotFoundError:
+            return {'consumer': consumer, 'status': 'error', 'output': '', 'error': 'access-keys binary not found'}
+        except Exception as e:
+            return {'consumer': consumer, 'status': 'error', 'output': '', 'error': str(e)}
+
+    if __name__ == '__main__':
+        print(json.dumps(run_test()))
+    PYTEST
+  - chmod +x /opt/snap-consumer/test-runner.py
+
+  # Create trigger server
+  - |
+    cat > /opt/snap-consumer/server.py << 'PYSERVER'
+    #!/usr/bin/env python3
+    import http.server
+    import socketserver
+    import subprocess
+    import json
+    import os
+    import threading
+
+    PORT = 9000
+
+    class TriggerHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/health':
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'OK')
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def do_POST(self):
+            if self.path == '/trigger':
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps({'status': 'triggered'}).encode())
+                threading.Thread(target=self.run_test).start()
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def run_test(self):
+            os.chdir('/opt/snap-consumer')
+            # Source environment
+            env = os.environ.copy()
+            with open('consumer.env') as f:
+                for line in f:
+                    if '=' in line and not line.startswith('#'):
+                        k, v = line.strip().split('=', 1)
+                        env[k] = v
+
+            # Run install
+            subprocess.run(['bash', 'install.sh'], env=env, check=True)
+
+            # Run test
+            result = subprocess.run(['python3', 'test-runner.py'],
+                                    capture_output=True, text=True, env=env)
+
+            # Report to builder
+            builder_url = env.get('BUILDER_URL', 'http://10.0.2.2:9999')
+            subprocess.run(['curl', '-X', 'POST', '-H', 'Content-Type: application/json',
+                          '-d', result.stdout, f'{builder_url}/report'])
+
+        def log_message(self, format, *args):
+            print(f"[trigger-server] {args[0]}")
+
+    with socketserver.TCPServer(('', PORT), TriggerHandler) as httpd:
+        print(f'[trigger-server] Listening on port {PORT}')
+        httpd.serve_forever()
+    PYSERVER
+  - chmod +x /opt/snap-consumer/server.py
+
+  # Create systemd service
+  - |
+    cat > /etc/systemd/system/snap-consumer.service << 'EOF'
+    [Unit]
+    Description=Snap Consumer Trigger Server
+    After=network-online.target snapd.service
+    Wants=network-online.target
+
+    [Service]
+    Type=simple
+    EnvironmentFile=/opt/snap-consumer/consumer.env
+    ExecStart=/usr/bin/python3 /opt/snap-consumer/server.py
+    Restart=on-failure
+    RestartSec=5
+    WorkingDirectory=/opt/snap-consumer
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+  - echo "[cloud-init] Systemd service created" > /dev/ttyS0
+  - systemctl daemon-reload
+  - systemctl enable --now snap-consumer.service
+  - echo "[cloud-init] Trigger server started" > /dev/ttyS0
+  - echo "[cloud-init] READY" > /dev/ttyS0
+
+final_message: "Snap consumer VM ready! Trigger server on port 9000"

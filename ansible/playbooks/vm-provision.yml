@@ -1,0 +1,65 @@
+---
+- name: Provision Snap Consumer VM
+  hosts: localhost
+  connection: local
+  vars_files:
+    - ../vars/vm-config.yml
+
+  tasks:
+    - name: Ensure directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - "{{ playbook_dir }}/../../vm/images"
+        - "{{ playbook_dir }}/../../vm/disks"
+        - "{{ playbook_dir }}/../../vm/ssh"
+
+    - name: Generate SSH key for VM access
+      community.crypto.openssh_keypair:
+        path: "{{ playbook_dir }}/../../vm/ssh/id_ed25519"
+        type: ed25519
+      register: ssh_key
+
+    - name: Download Ubuntu cloud image
+      get_url:
+        url: "{{ ubuntu_cloud_image_url }}"
+        dest: "{{ playbook_dir }}/../../vm/images/ubuntu-24.04-cloudimg.img"
+
+    - name: Create VM disk from cloud image
+      command: >
+        qemu-img create -f qcow2
+        -b {{ playbook_dir }}/../../vm/images/ubuntu-24.04-cloudimg.img
+        -F qcow2
+        {{ playbook_dir }}/../../vm/disks/{{ vm_name }}.qcow2
+        {{ vm_disk_size_gb }}G
+      args:
+        creates: "{{ playbook_dir }}/../../vm/disks/{{ vm_name }}.qcow2"
+
+    - name: Generate cloud-init user-data
+      template:
+        src: ../roles/snap_consumer/templates/user-data.j2
+        dest: "{{ playbook_dir }}/../../vm/cloud-init-user-data"
+
+    - name: Create cloud-init ISO
+      command: >
+        cloud-localds {{ playbook_dir }}/../../vm/disks/{{ vm_name }}-cidata.iso
+        {{ playbook_dir }}/../../vm/cloud-init-user-data
+      args:
+        creates: "{{ playbook_dir }}/../../vm/disks/{{ vm_name }}-cidata.iso"
+
+    - name: Display VM start command
+      debug:
+        msg: |
+          VM provisioned! Start with:
+
+          qemu-system-x86_64 \
+            -name {{ vm_name }} \
+            -m {{ vm_memory_mb }} \
+            -smp {{ vm_vcpus }} \
+            -enable-kvm \
+            -drive file={{ playbook_dir }}/../../vm/disks/{{ vm_name }}.qcow2,format=qcow2 \
+            -drive file={{ playbook_dir }}/../../vm/disks/{{ vm_name }}-cidata.iso,format=raw \
+            -netdev user,id=net0,hostfwd=tcp::{{ vm_ssh_host_port }}-:22,hostfwd=tcp::{{ vm_trigger_host_port }}-:9000 \
+            -device virtio-net-pci,netdev=net0 \
+            -nographic

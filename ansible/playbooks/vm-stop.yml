@@ -1,0 +1,27 @@
+---
+- name: Stop Snap Consumer VM
+  hosts: localhost
+  connection: local
+  vars_files:
+    - ../vars/vm-config.yml
+
+  tasks:
+    - name: Check if VM is running
+      stat:
+        path: "/tmp/{{ vm_name }}.pid"
+      register: pid_file
+
+    - name: Stop VM
+      command: "kill {{ lookup('file', '/tmp/' + vm_name + '.pid') }}"
+      when: pid_file.stat.exists
+      ignore_errors: yes
+
+    - name: Remove PID file
+      file:
+        path: "/tmp/{{ vm_name }}.pid"
+        state: absent
+      when: pid_file.stat.exists
+
+    - name: Confirm VM stopped
+      debug:
+        msg: "VM stopped successfully"

@@ -1,0 +1,29 @@
+---
+- name: Destroy Snap Consumer VM
+  hosts: localhost
+  connection: local
+  vars_files:
+    - ../vars/vm-config.yml
+
+  tasks:
+    - name: Stop VM if running
+      import_playbook: vm-stop.yml
+
+    - name: Remove VM disk
+      file:
+        path: "{{ playbook_dir }}/../../vm/disks/{{ vm_name }}.qcow2"
+        state: absent
+
+    - name: Remove cloud-init ISO
+      file:
+        path: "{{ playbook_dir }}/../../vm/disks/{{ vm_name }}-cidata.iso"
+        state: absent
+
+    - name: Remove cloud-init user-data
+      file:
+        path: "{{ playbook_dir }}/../../vm/cloud-init-user-data"
+        state: absent
+
+    - name: Confirm VM destroyed
+      debug:
+        msg: "VM destroyed successfully. Run vm-provision.yml to recreate."

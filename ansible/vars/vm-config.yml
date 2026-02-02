@@ -1,0 +1,21 @@
+---
+# VM Configuration
+vm_name: snap-consumer-vm
+vm_memory_mb: 2048
+vm_vcpus: 2
+vm_disk_size_gb: 20
+
+# Ubuntu Cloud Image
+ubuntu_cloud_image_url: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
+
+# Network (QEMU user-mode - no host changes needed)
+vm_ssh_host_port: 2222          # Host port for SSH access
+vm_trigger_host_port: 9002      # Host port for trigger server
+vm_internal_gateway: "10.0.2.2" # Slirp gateway to host
+
+# User Configuration
+vm_user: testrunner
+
+# Service URLs (from VM's perspective via slirp gateway)
+builder_url: "http://10.0.2.2:9999"
+snap_registry_url: "http://10.0.2.2:8081"

@@ -1,0 +1,15 @@
+[Unit]
+Description=Trigger Server
+After=snapd.service snapd.socket
+Wants=snapd.socket
+
+[Service]
+Type=simple
+Environment=CONSUMER_NAME=consumer-ubuntu
+ExecStartPre=/bin/sleep 3
+ExecStart=/entrypoint.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

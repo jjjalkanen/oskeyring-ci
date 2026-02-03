@@ -7,15 +7,21 @@ echo "=========================================="
 
 cd /build
 
-# Build Rust binary
-echo "Building Rust binary..."
+# Build default binary (for flatpak, deb, rpm)
+echo "Building default Rust binary..."
 cargo build --release
-
-# Create output directory structure
-mkdir -p /output/{flatpak,snap,deb,rpm}
-
-# Copy binary to output
 cp target/release/access-keys /output/access-keys
 
-echo "Build complete: Binary at /output/access-keys"
+# Build snap-specific binary with snap feature
+echo "Building Snap-specific binary..."
+cargo build --release --features snap
+mkdir -p /output/snap
+cp target/release/access-keys /output/access-keys-snap
+
+# Create output directory structure
+mkdir -p /output/{flatpak,deb,rpm}
+
+echo "Build complete:"
+echo "  - Default binary: /output/access-keys"
+echo "  - Snap binary: /output/access-keys-snap"
 echo ""

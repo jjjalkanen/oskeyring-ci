@@ -53,7 +53,7 @@ runcmd:
     EOF
   - chmod +x /opt/snap-consumer/install.sh
 
-  # Create test runner (same as container version)
+  # Create test runner (snap-specific version)
   - |
     cat > /opt/snap-consumer/test-runner.py << 'PYTEST'
     #!/usr/bin/env python3
@@ -62,21 +62,48 @@ runcmd:
     import os
     import sys
 
+    def test_snap_storage():
+        """Snap-specific test: verify secret storage and isolation"""
+        errors = []
+        env = {**os.environ, 'PATH': '/snap/bin:' + os.environ.get('PATH', '')}
+
+        # First run: should create secret
+        try:
+            result = subprocess.run(['access-keys'], capture_output=True, text=True, timeout=30, env=env)
+            output = result.stdout.strip()
+            if result.returncode != 0:
+                errors.append(f"First run failed with exit code {result.returncode}: {result.stderr}")
+            elif output != "Secret created":
+                errors.append(f"First run expected 'Secret created', got: {output}")
+        except Exception as e:
+            errors.append(f"First run error: {str(e)}")
+            return False, errors
+
+        # Second run: should read secret back
+        try:
+            result = subprocess.run(['access-keys'], capture_output=True, text=True, timeout=30, env=env)
+            output = result.stdout.strip()
+            if result.returncode != 0:
+                errors.append(f"Second run failed with exit code {result.returncode}: {result.stderr}")
+            elif not output.startswith("Secret read from SNAP_DATA:"):
+                errors.append(f"Second run expected secret read message, got: {output}")
+            elif "Stored secret" not in output:
+                errors.append(f"Second run did not contain expected secret value: {output}")
+        except Exception as e:
+            errors.append(f"Second run error: {str(e)}")
+            return False, errors
+
+        return len(errors) == 0, errors
+
     def run_test():
         consumer = os.environ.get('CONSUMER_NAME', 'consumer-ubuntu')
         try:
-            result = subprocess.run(
-                ['access-keys'],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env={**os.environ, 'PATH': '/snap/bin:' + os.environ.get('PATH', '')}
-            )
-            if result.returncode == 0 and 'All good' in result.stdout:
-                return {'consumer': consumer, 'status': 'pass', 'output': result.stdout.strip(), 'error': ''}
+            # Run snap-specific test
+            success, errors = test_snap_storage()
+            if success:
+                return {'consumer': consumer, 'status': 'pass', 'output': 'All good', 'error': ''}
             else:
-                return {'consumer': consumer, 'status': 'fail', 'output': result.stdout.strip(),
-                        'error': f'Exit code: {result.returncode}, stderr: {result.stderr.strip()}'}
+                return {'consumer': consumer, 'status': 'fail', 'output': '', 'error': '; '.join(errors)}
         except subprocess.TimeoutExpired:
             return {'consumer': consumer, 'status': 'error', 'output': '', 'error': 'Timeout after 30s'}
         except FileNotFoundError:

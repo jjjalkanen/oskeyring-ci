@@ -5,7 +5,7 @@ echo "=========================================="
 echo "Publishing to Snap registry"
 echo "=========================================="
 
-BINARY="/output/access-keys"
+BINARY="/output/access-keys-snap"
 
 # Wait for registry to be available
 timeout 60 bash -c 'until curl -s http://snap-registry:8081/ > /dev/null; do sleep 1; done'
@@ -19,7 +19,7 @@ cat > ${SNAP_DIR}/meta/snap.yaml << EOF
 name: access-keys
 version: '0.1.0'
 summary: Access keys test application
-description: Simple test application that prints "All good"
+description: Test application for secure snap storage
 grade: devel
 confinement: devmode
 base: core22
@@ -27,10 +27,12 @@ base: core22
 apps:
   access-keys:
     command: bin/access-keys
+    plugs:
+      - home
 EOF
 
 # Copy binary
-cp ${BINARY} ${SNAP_DIR}/bin/
+cp ${BINARY} ${SNAP_DIR}/bin/access-keys
 chmod +x ${SNAP_DIR}/bin/access-keys
 
 # Create squashfs snap

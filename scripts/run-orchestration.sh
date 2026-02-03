@@ -157,6 +157,67 @@ reset_vm_state
 start_vm
 echo ""
 
+# Step 2.5: Update test-runner script in VM
+echo "Step 2.5: Updating test-runner script in VM..."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Wait for SSH to be ready (max 60 seconds)
+echo "Waiting for SSH to be ready on port 2222..."
+for i in {1..60}; do
+    if ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o ConnectTimeout=2 \
+        -p 2222 \
+        testrunner@localhost "exit" 2>/dev/null; then
+        echo "SSH is ready"
+        break
+    fi
+    if [ $i -eq 60 ]; then
+        echo "WARNING: SSH not ready after 60 seconds, skipping script update"
+        echo ""
+        # Continue without updating (VM will use embedded script)
+        # Don't exit - this is not critical
+    else
+        sleep 1
+    fi
+done
+
+# Copy and update script if SSH is ready
+if ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    -o ConnectTimeout=2 \
+    -p 2222 \
+    testrunner@localhost "exit" 2>/dev/null; then
+
+    scp -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -P 2222 \
+        "$SCRIPT_DIR/../consumers/trigger-server/test-runner.py" \
+        testrunner@localhost:/tmp/test-runner.py 2>&1 | grep -v "Warning: Permanently added" || true
+
+    ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -p 2222 \
+        testrunner@localhost \
+        "sudo mv /tmp/test-runner.py /opt/snap-consumer/test-runner.py && sudo chmod +x /opt/snap-consumer/test-runner.py" 2>&1 | grep -v "Warning: Permanently added" || true
+
+    # Clear snap data from previous test runs
+    echo "Clearing snap data from previous runs..."
+    ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -p 2222 \
+        testrunner@localhost \
+        "sudo rm -rf /var/snap/access-keys/current/* 2>/dev/null || true" 2>&1 | grep -v "Warning: Permanently added" || true
+
+    echo "Test-runner script updated successfully"
+fi
+echo ""
+
 # Step 3: Launch services
 echo "Step 3: Launching all services..."
 echo "Note: Builder will run to completion, then containers will be stopped"

@@ -18,10 +18,17 @@ cargo build --release --features snap
 mkdir -p /output/snap
 cp target/release/access-keys /output/access-keys-snap
 
+# Build flatpak-specific binary with flatpak feature
+echo "Building Flatpak-specific binary..."
+cargo build --release --features flatpak
+mkdir -p /output/flatpak
+cp target/release/access-keys /output/access-keys-flatpak
+
 # Create output directory structure
-mkdir -p /output/{flatpak,deb,rpm}
+mkdir -p /output/{deb,rpm}
 
 echo "Build complete:"
 echo "  - Default binary: /output/access-keys"
 echo "  - Snap binary: /output/access-keys-snap"
+echo "  - Flatpak binary: /output/access-keys-flatpak"
 echo ""

@@ -9,6 +9,8 @@ RUN dnf install -y \
     createrepo_c \
     python3 curl \
     gnupg \
+    pkg-config \
+    dbus-devel \
     && dnf clean all
 
 # Add Flathub remote and install Flatpak SDK/Platform

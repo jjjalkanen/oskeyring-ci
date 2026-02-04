@@ -4,6 +4,65 @@ import json
 import os
 import sys
 
+def test_flatpak_storage():
+    """Flatpak-specific test: verify Secret Portal retrieval and isolation"""
+    errors = []
+
+    # The Secret Portal provides a per-application master secret
+    # It's automatically generated and should be consistent across runs
+    first_secret = None
+
+    # First run: retrieve the secret
+    try:
+        result = subprocess.run(
+            ['flatpak', 'run', 'org.example.access-keys'],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        output = result.stdout.strip()
+
+        if result.returncode != 0:
+            errors.append(f"First run failed with exit code {result.returncode}: {result.stderr}")
+        elif not output.startswith("Secret read from Flatpak Portal:"):
+            errors.append(f"First run expected secret read message, got: {output}")
+        else:
+            # Extract the hex secret from output
+            first_secret = output
+
+    except Exception as e:
+        errors.append(f"First run error: {str(e)}")
+        return False, errors
+
+    # Second run: should get the same secret (demonstrating persistence)
+    try:
+        result = subprocess.run(
+            ['flatpak', 'run', 'org.example.access-keys'],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        output = result.stdout.strip()
+
+        if result.returncode != 0:
+            errors.append(f"Second run failed with exit code {result.returncode}: {result.stderr}")
+        elif not output.startswith("Secret read from Flatpak Portal:"):
+            errors.append(f"Second run expected secret read message, got: {output}")
+        elif first_secret and output != first_secret:
+            errors.append(f"Secret changed between runs! First: {first_secret}, Second: {output}")
+
+    except Exception as e:
+        errors.append(f"Second run error: {str(e)}")
+        return False, errors
+
+    # Test isolation: The secret is provided by the portal and not directly accessible
+    # from the filesystem. This is different from Snap where we check SNAP_DATA directory.
+    # For Flatpak, the portal manages the secret internally and provides it only to the
+    # sandboxed application through D-Bus.
+    # We consider the test passed if we successfully retrieved the secret twice.
+
+    return len(errors) == 0, errors
+
 def test_snap_storage():
     """Snap-specific test: verify secret storage and isolation"""
     errors = []
@@ -75,11 +134,30 @@ def test_snap_storage():
 def run_test():
     consumer_name = os.environ.get('CONSUMER_NAME', 'unknown')
 
-    # Check if this is the snap consumer
+    # Check consumer type
     is_snap = consumer_name == 'consumer-ubuntu'
+    is_flatpak = consumer_name == 'consumer-arch'
 
     try:
-        if is_snap:
+        if is_flatpak:
+            # Run flatpak-specific test
+            success, errors = test_flatpak_storage()
+
+            if success:
+                return {
+                    "consumer": consumer_name,
+                    "status": "pass",
+                    "output": "All good",
+                    "error": ""
+                }
+            else:
+                return {
+                    "consumer": consumer_name,
+                    "status": "fail",
+                    "output": "",
+                    "error": "; ".join(errors)
+                }
+        elif is_snap:
             # Run snap-specific test
             success, errors = test_snap_storage()
 

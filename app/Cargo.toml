@@ -5,5 +5,12 @@ edition = "2021"
 
 [features]
 snap = []
+flatpak = ["ashpd", "tokio"]
 
 [dependencies]
+tokio = { version = "1", features = ["rt", "macros", "io-util", "net"], optional = true }
+
+[dependencies.ashpd]
+version = "0.9"
+optional = true
+features = []

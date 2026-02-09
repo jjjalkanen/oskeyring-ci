@@ -6,6 +6,7 @@ edition = "2021"
 [features]
 snap = []
 flatpak = ["ashpd", "tokio"]
+systemd = []
 
 [dependencies]
 tokio = { version = "1", features = ["rt", "macros", "io-util", "net"], optional = true }

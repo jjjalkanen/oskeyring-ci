@@ -1,7 +1,9 @@
-FROM registry.access.redhat.com/ubi9/ubi
+FROM registry.access.redhat.com/ubi9/ubi-init
 
-# Install required packages (curl already installed as curl-minimal, python3 pre-installed)
-RUN dnf install -y python3 && \
+ENV container=docker
+
+# Install required packages (python3 and systemd already present in ubi-init)
+RUN dnf install -y python3 systemd && \
     dnf clean all
 
 # Add custom yum repository
@@ -11,10 +13,17 @@ RUN echo -e '[custom-repo]\nname=Custom Repository\nbaseurl=http://rpm-registry:
 COPY trigger-server/server.py /server.py
 COPY trigger-server/test-runner.py /test-runner.py
 COPY redhat-rpm/install.sh /install.sh
-RUN chmod +x /server.py /test-runner.py /install.sh
+COPY redhat-rpm/entrypoint.sh /entrypoint.sh
+RUN chmod +x /server.py /test-runner.py /install.sh /entrypoint.sh
+
+# Install systemd service for trigger server
+COPY redhat-rpm/trigger-server.service /etc/systemd/system/trigger-server.service
+RUN systemctl enable trigger-server.service
 
 ENV CONSUMER_NAME=consumer-redhat
 
 EXPOSE 9000
 
-CMD ["python3", "/server.py"]
+# Use systemd as init
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

@@ -5,6 +5,13 @@ use std::path::PathBuf;
 #[cfg(feature = "snap")]
 use std::io::{Read, Write};
 
+#[cfg(feature = "systemd")]
+use std::fs;
+#[cfg(feature = "systemd")]
+use std::path::PathBuf;
+#[cfg(feature = "systemd")]
+use std::io::Read;
+
 #[cfg(feature = "flatpak")]
 use ashpd::desktop::secret::Secret;
 
@@ -77,6 +84,35 @@ fn run_snap_storage() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(feature = "systemd")]
+fn run_systemd_storage() -> Result<(), Box<dyn std::error::Error>> {
+    // Get CREDENTIALS_DIRECTORY environment variable
+    let creds_dir = std::env::var("CREDENTIALS_DIRECTORY")
+        .map_err(|_| "CREDENTIALS_DIRECTORY environment variable not set")?;
+
+    let secret_file = PathBuf::from(creds_dir).join("sync-key");
+
+    // Read the secret from the credentials directory
+    let mut file = fs::File::open(&secret_file)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+
+    if buffer.is_empty() {
+        return Err("Secret file is empty".into());
+    }
+
+    let secret = String::from_utf8_lossy(&buffer);
+    // Print up to 20 characters like the plan specified
+    let display_secret = if secret.len() > 20 {
+        &secret[..20]
+    } else {
+        &secret
+    };
+    println!("Secret read from CREDENTIALS_DIRECTORY: {}", display_secret);
+
+    Ok(())
+}
+
 #[cfg(feature = "flatpak")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -100,7 +136,18 @@ fn main() {
     }
 }
 
-#[cfg(all(not(feature = "flatpak"), not(feature = "snap")))]
+#[cfg(all(not(feature = "flatpak"), not(feature = "snap"), feature = "systemd"))]
+fn main() {
+    match run_systemd_storage() {
+        Ok(_) => {},
+        Err(e) => {
+            eprintln!("Error accessing systemd storage: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(all(not(feature = "flatpak"), not(feature = "snap"), not(feature = "systemd")))]
 fn main() {
     println!("All good");
 }

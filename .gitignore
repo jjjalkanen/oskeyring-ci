@@ -25,3 +25,5 @@ vm/disks/
 vm/ssh/
 vm/cloud-init-user-data
 vm/logs/
+
+firefox/

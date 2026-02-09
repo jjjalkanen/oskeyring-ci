@@ -57,6 +57,12 @@ services:
       - deb-registry
     ports:
       - "9003:9000"
+    privileged: true
+    tmpfs:
+      - /run
+      - /run/lock
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
     networks:
       - default
 
@@ -69,6 +75,12 @@ services:
       - rpm-registry
     ports:
       - "9004:9000"
+    privileged: true
+    tmpfs:
+      - /run
+      - /run/lock
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
     networks:
       - default
 

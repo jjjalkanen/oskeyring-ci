@@ -131,12 +131,76 @@ def test_snap_storage():
 
     return len(errors) == 0, errors
 
+def test_systemd_storage():
+    """systemd-specific test: verify credential encryption and systemd-run integration"""
+    errors = []
+
+    # Negative test: run access-keys directly without systemd
+    # Should fail because CREDENTIALS_DIRECTORY is not set
+    try:
+        result = subprocess.run(
+            ['access-keys'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+
+        if result.returncode == 0:
+            errors.append("Direct run should have failed without CREDENTIALS_DIRECTORY, but succeeded")
+        # Expected to fail - this is good
+    except Exception as e:
+        errors.append(f"Negative test error: {str(e)}")
+        return False, errors
+
+    # Encryption check: verify raw secret is not in encrypted blob
+    try:
+        with open('/etc/access-keys/sync.cred', 'rb') as f:
+            encrypted_data = f.read()
+
+        # Check that the raw secret "0123456789abcdef" is not in the encrypted file
+        if b"0123456789abcdef" in encrypted_data:
+            errors.append("Raw secret found in encrypted credential file - encryption failed!")
+    except Exception as e:
+        errors.append(f"Encryption check error: {str(e)}")
+        return False, errors
+
+    # Positive test: run via systemd-run with encrypted credential
+    try:
+        result = subprocess.run(
+            [
+                'systemd-run',
+                '--pipe',
+                '--wait',
+                '--quiet',
+                '--property=LoadCredentialEncrypted=sync-key:/etc/access-keys/sync.cred',
+                '/usr/bin/access-keys'
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        output = result.stdout.strip()
+
+        if result.returncode != 0:
+            errors.append(f"systemd-run failed with exit code {result.returncode}: {result.stderr}")
+        elif not output.startswith("Secret read from CREDENTIALS_DIRECTORY:"):
+            errors.append(f"Expected secret read message, got: {output}")
+        elif "0123456789abcdef" not in output:
+            errors.append(f"Output did not contain expected secret value: {output}")
+
+    except Exception as e:
+        errors.append(f"Positive test error: {str(e)}")
+        return False, errors
+
+    return len(errors) == 0, errors
+
 def run_test():
     consumer_name = os.environ.get('CONSUMER_NAME', 'unknown')
 
     # Check consumer type
     is_snap = consumer_name == 'consumer-ubuntu'
     is_flatpak = consumer_name == 'consumer-arch'
+    is_systemd = consumer_name in ('consumer-debian', 'consumer-redhat')
 
     try:
         if is_flatpak:
@@ -160,6 +224,24 @@ def run_test():
         elif is_snap:
             # Run snap-specific test
             success, errors = test_snap_storage()
+
+            if success:
+                return {
+                    "consumer": consumer_name,
+                    "status": "pass",
+                    "output": "All good",
+                    "error": ""
+                }
+            else:
+                return {
+                    "consumer": consumer_name,
+                    "status": "fail",
+                    "output": "",
+                    "error": "; ".join(errors)
+                }
+        elif is_systemd:
+            # Run systemd-specific test
+            success, errors = test_systemd_storage()
 
             if success:
                 return {

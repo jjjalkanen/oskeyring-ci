@@ -1,0 +1,15 @@
+[Unit]
+Description=Trigger Server
+After=systemd-journald.service
+Wants=systemd-journald.service
+
+[Service]
+Type=simple
+Environment=CONSUMER_NAME=consumer-redhat
+ExecStartPre=/bin/sleep 3
+ExecStart=/entrypoint.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

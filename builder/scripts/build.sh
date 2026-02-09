@@ -24,6 +24,11 @@ cargo build --release --features flatpak
 mkdir -p /output/flatpak
 cp target/release/access-keys /output/access-keys-flatpak
 
+# Build systemd-specific binary with systemd feature
+echo "Building systemd-specific binary..."
+cargo build --release --features systemd
+cp target/release/access-keys /output/access-keys-systemd
+
 # Create output directory structure
 mkdir -p /output/{deb,rpm}
 
@@ -31,4 +36,5 @@ echo "Build complete:"
 echo "  - Default binary: /output/access-keys"
 echo "  - Snap binary: /output/access-keys-snap"
 echo "  - Flatpak binary: /output/access-keys-flatpak"
+echo "  - systemd binary: /output/access-keys-systemd"
 echo ""

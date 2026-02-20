@@ -3,7 +3,7 @@ set -e
 
 CONSUMERS=(
     "consumer-arch:9000"
-    # "host.containers.internal:9002"  # Snap VM - disabled to prevent timeout
+    "host.containers.internal:9002"
     "consumer-debian:9000"
     "consumer-redhat:9000"
 )

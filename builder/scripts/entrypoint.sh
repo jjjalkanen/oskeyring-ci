@@ -20,7 +20,7 @@ set -e
 
 # Step 2: Publish to all registries
 ./scripts/publish-flatpak.sh
-# ./scripts/publish-snap.sh
+./scripts/publish-snap.sh
 ./scripts/publish-deb.sh
 ./scripts/publish-rpm.sh
 

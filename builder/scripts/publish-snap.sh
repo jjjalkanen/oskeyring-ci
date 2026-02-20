@@ -5,7 +5,7 @@ echo "=========================================="
 echo "Publishing to Snap registry"
 echo "=========================================="
 
-BINARY="/output/access-keys-snap"
+BINARY="output/access-keys-snap"
 
 # Wait for registry to be available
 timeout 60 bash -c 'until curl -s http://snap-registry:8081/ > /dev/null; do sleep 1; done'
@@ -36,10 +36,10 @@ cp ${BINARY} ${SNAP_DIR}/bin/access-keys
 chmod +x ${SNAP_DIR}/bin/access-keys
 
 # Create squashfs snap
-mksquashfs ${SNAP_DIR} /output/snap/access-keys_0.1.0_amd64.snap -noappend -comp lzo -all-root
+mksquashfs ${SNAP_DIR} output/snap/access-keys_0.1.0_amd64.snap -noappend -comp lzo -all-root
 
 # Upload to registry
-curl --upload-file /output/snap/access-keys_0.1.0_amd64.snap \
+curl --upload-file output/snap/access-keys_0.1.0_amd64.snap \
     http://snap-registry:8081/snaps/access-keys_0.1.0_amd64.snap
 
 echo "Snap publish complete"

@@ -5,7 +5,7 @@ echo "=========================================="
 echo "Publishing to RPM registry"
 echo "=========================================="
 
-BINARY="/output/access-keys-systemd"
+BINARY="output/access-keys-systemd"
 PKG_NAME="access-keys"
 VERSION="0.1.0"
 
@@ -18,7 +18,7 @@ mkdir -p ${RPM_DIR}/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 mkdir -p ${RPM_DIR}/BUILD/usr/bin
 
 # Copy binary
-cp ${BINARY} ${RPM_DIR}/BUILD/usr/bin/
+cp ${BINARY} ${RPM_DIR}/BUILD/usr/bin/access-keys
 chmod +x ${RPM_DIR}/BUILD/usr/bin/access-keys
 
 # Create spec file
@@ -53,17 +53,17 @@ rpmbuild --define "_topdir ${RPM_DIR}" -bb ${RPM_DIR}/SPECS/${PKG_NAME}.spec
 RPM_FILE=$(find ${RPM_DIR}/RPMS -name "*.rpm" -type f)
 
 # Copy to output
-cp ${RPM_FILE} /output/rpm/
+cp ${RPM_FILE} output/rpm/
 
 # Upload to registry (at root of /rpm, not in packages/ subdirectory)
 curl --upload-file ${RPM_FILE} \
     http://rpm-registry:8083/rpm/$(basename ${RPM_FILE})
 
 # Create repository metadata
-createrepo_c /output/rpm/
+createrepo_c output/rpm/
 
 # Upload repodata directory to registry
-for f in /output/rpm/repodata/*; do
+for f in output/rpm/repodata/*; do
     filename=$(basename "$f")
     curl --upload-file "$f" http://rpm-registry:8083/rpm/repodata/${filename}
 done

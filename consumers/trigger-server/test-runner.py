@@ -2,7 +2,6 @@
 import subprocess
 import json
 import os
-import sys
 
 def test_flatpak_storage():
     """Flatpak-specific test: verify Secret Portal retrieval and isolation"""
@@ -164,10 +163,13 @@ def test_systemd_storage():
         errors.append(f"Encryption check error: {str(e)}")
         return False, errors
 
-    # Positive test: run via systemd-run with encrypted credential
+    # Positive test: run via systemd-run with encrypted credential.
+    # PID 1 (root) decrypts the credential and populates CREDENTIALS_DIRECTORY;
+    # the binary runs as non-root and reads the plaintext from there.
     try:
         result = subprocess.run(
             [
+                'sudo',
                 'systemd-run',
                 '--pipe',
                 '--wait',

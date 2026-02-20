@@ -5,7 +5,7 @@ echo "=========================================="
 echo "Publishing to Flatpak registry"
 echo "=========================================="
 
-BINARY="/output/access-keys-flatpak"
+BINARY="output/access-keys-flatpak"
 APP_ID="org.example.access-keys"
 REGISTRY="http://flatpak-registry:8080"
 
@@ -42,7 +42,7 @@ chmod +x /tmp/flatpak-app/files/bin/access-keys
 
 # Copy appstream metadata to suppress warnings
 mkdir -p /tmp/flatpak-app/files/share/metainfo
-cp /scripts/org.example.access-keys.metainfo.xml /tmp/flatpak-app/files/share/metainfo/
+cp scripts/org.example.access-keys.metainfo.xml /tmp/flatpak-app/files/share/metainfo/
 
 # Finish the build
 flatpak build-finish /tmp/flatpak-app --command=access-keys

@@ -1,21 +1,36 @@
 FROM archlinux:latest
 
-# Update system and install required packages
 RUN pacman -Syu --noconfirm && \
-    pacman -S --noconfirm flatpak python curl gnupg xdg-desktop-portal dbus
+    pacman -S --noconfirm flatpak python curl gnupg \
+        xdg-desktop-portal gnome-keyring dbus sudo
 
-# Copy scripts from local directory
-COPY trigger-server/server.py /server.py
-COPY trigger-server/test-runner.py /test-runner.py
-COPY arch-flatpak/install.sh /install.sh
-RUN chmod +x /server.py /test-runner.py /install.sh
+# Pre-install the Flatpak runtime so it's cached in the image layer
+RUN flatpak remote-add --if-not-exists flathub \
+        https://flathub.org/repo/flathub.flatpakrepo && \
+    flatpak install -y flathub org.freedesktop.Platform//23.08
 
-ENV CONSUMER_NAME=consumer-arch
-
-# Setup D-Bus
+RUN useradd -m consumer
 RUN dbus-uuidgen > /etc/machine-id
 
+# Portal config: tell xdg-desktop-portal to use gnome-keyring for Secret
+# and nothing else (avoids needing xdg-desktop-portal-gtk which requires a display)
+RUN printf '[preferred]\ndefault=none\norg.freedesktop.impl.portal.Secret=gnome-keyring\n' \
+    > /usr/share/xdg-desktop-portal/portals.conf
+
+# Allow consumer to run upgrade.sh as root without password
+RUN echo 'consumer ALL=(ALL) NOPASSWD: /home/consumer/upgrade.sh' > /etc/sudoers.d/consumer
+
+# Scripts
+COPY arch-flatpak/upgrade.sh /home/consumer/upgrade.sh
+RUN chmod +x /home/consumer/upgrade.sh
+COPY --chown=consumer:consumer trigger-server/server.py /home/consumer/server.py
+COPY --chown=consumer:consumer trigger-server/test-runner.py /home/consumer/test-runner.py
+
+# Startup wrapper: system dbus → session bus → portal → server
+COPY arch-flatpak/start.sh /home/consumer/start.sh
+RUN chmod +x /home/consumer/start.sh
+
+ENV CONSUMER_NAME=consumer-arch
 EXPOSE 9000
 
-# Start D-Bus and then the server
-CMD ["sh", "-c", "dbus-daemon --system --fork && python /server.py"]
+CMD ["/home/consumer/start.sh"]

@@ -1,13 +1,13 @@
 [Unit]
-Description=Trigger Server
-After=systemd-journald.service
-Wants=systemd-journald.service
+Description=Access Keys Monitor
+After=network.target dbus.socket
 
 [Service]
 Type=simple
+User=consumer
+Group=consumer
 Environment=CONSUMER_NAME=consumer-redhat
-ExecStartPre=/bin/sleep 3
-ExecStart=/entrypoint.sh
+ExecStart=/usr/bin/python3 /home/consumer/server.py
 Restart=on-failure
 RestartSec=5
 

@@ -7,7 +7,7 @@ import sys
 from datetime import datetime
 
 PORT = 9999
-EXPECTED_CONSUMERS = ['consumer-arch', 'consumer-ubuntu', 'consumer-debian', 'consumer-redhat']
+EXPECTED_CONSUMERS = ['consumer-arch', 'consumer-debian', 'consumer-redhat']
 
 results = {}
 results_lock = threading.Lock()

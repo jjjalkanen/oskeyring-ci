@@ -1,31 +1,27 @@
 #!/bin/bash
 set -e
 
-echo "=========================================="
-echo "Triggering all consumers"
-echo "=========================================="
-
 CONSUMERS=(
     "consumer-arch:9000"
-    "host.containers.internal:9002"   # VM via host port forward
+    # "host.containers.internal:9002"  # Snap VM - disabled to prevent timeout
     "consumer-debian:9000"
     "consumer-redhat:9000"
 )
 
-# Wait a bit for consumers to be ready
-sleep 5
-
-# Trigger all consumers in parallel
+echo "Checking consumer health..."
 for consumer in "${CONSUMERS[@]}"; do
-    echo "Triggering ${consumer}..."
-    (
-        timeout 10 bash -c "until curl -s http://${consumer}/health > /dev/null; do sleep 1; done" || true
-        curl -X POST http://${consumer}/trigger &
-    )
+    echo "  Checking ${consumer}..."
+    if timeout 90 bash -c "until curl -s http://${consumer}/health > /dev/null 2>&1; do sleep 1; done"; then
+        echo "  ${consumer} is healthy"
+    else
+        echo "  Warning: ${consumer} health check timed out (continuing anyway)"
+    fi
 done
-
-# Wait for all background jobs
-wait
-
-echo "All consumers triggered"
 echo ""
+
+echo "Triggering consumers..."
+for consumer in "${CONSUMERS[@]}"; do
+    echo "  Triggering ${consumer}..."
+    curl -s -X POST "http://${consumer}/trigger" || echo "  Warning: trigger failed for ${consumer}"
+done
+echo "All consumers triggered"

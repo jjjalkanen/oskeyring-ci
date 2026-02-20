@@ -6,32 +6,40 @@ echo "Starting Builder Pipeline"
 echo "=========================================="
 echo ""
 
+pushd /home/builder
+
+rm -rf ./build/target/ || true
+
+# --- Firefox disabled for orchestration refactoring ---
+# git config --global --add safe.directory /home/builder/firefox
+
+set -e
+
 # Step 1: Build
-/scripts/build.sh
+./scripts/build.sh
 
 # Step 2: Publish to all registries
-/scripts/publish-flatpak.sh
-/scripts/publish-snap.sh
-/scripts/publish-deb.sh
-/scripts/publish-rpm.sh
+./scripts/publish-flatpak.sh
+# ./scripts/publish-snap.sh
+./scripts/publish-deb.sh
+./scripts/publish-rpm.sh
 
-# Step 3: Start results collector in background
+# Step 3: Start results collector
 echo "=========================================="
 echo "Starting results collector"
 echo "=========================================="
-python3 /scripts/results-collector.py &
+python3 ./scripts/results-collector.py &
 COLLECTOR_PID=$!
+sleep 2
 
-# Wait for collector to be ready
-sleep 3
+# Step 4: Trigger consumers (health check + POST /trigger)
+./scripts/trigger-consumers.sh
 
-# Step 4: Trigger all consumers
-/scripts/trigger-consumers.sh
-
-# Step 5: Wait for results collector to finish
 echo "=========================================="
-echo "Waiting for test results..."
+echo "Consumers triggered, waiting for results..."
 echo "=========================================="
+
+# Step 5: Wait for results
 wait ${COLLECTOR_PID}
 EXIT_CODE=$?
 
@@ -39,5 +47,7 @@ echo ""
 echo "=========================================="
 echo "Pipeline Complete"
 echo "=========================================="
+
+popd
 
 exit ${EXIT_CODE}

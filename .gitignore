@@ -26,4 +26,9 @@ vm/ssh/
 vm/cloud-init-user-data
 vm/logs/
 
+# sccache cache (contents only, keep the directory)
+cache/*
+!cache/.gitkeep
+
+# Firefox source and build artifacts
 firefox/

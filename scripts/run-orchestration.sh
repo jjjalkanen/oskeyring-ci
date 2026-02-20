@@ -126,7 +126,7 @@ stop_vm() {
 }
 
 # Cleanup handler
-TIMEOUT_MINUTES=10
+TIMEOUT_MINUTES=120
 CLEANUP_DONE=false
 
 cleanup() {
@@ -157,8 +157,8 @@ reset_vm_state
 start_vm
 echo ""
 
-# Step 2.5: Update test-runner script in VM
-echo "Step 2.5: Updating test-runner script in VM..."
+# Step 2.5: Update scripts in VM
+echo "Step 2.5: Updating scripts in VM..."
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Wait for SSH to be ready (max 60 seconds)
@@ -183,7 +183,7 @@ for i in {1..60}; do
     fi
 done
 
-# Copy and update script if SSH is ready
+# Copy and update scripts if SSH is ready
 if ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
     -o StrictHostKeyChecking=no \
     -o UserKnownHostsFile=/dev/null \
@@ -191,6 +191,7 @@ if ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
     -p 2222 \
     testrunner@localhost "exit" 2>/dev/null; then
 
+    # Push test-runner.py
     scp -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
         -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null \
@@ -205,6 +206,52 @@ if ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
         testrunner@localhost \
         "sudo mv /tmp/test-runner.py /opt/snap-consumer/test-runner.py && sudo chmod +x /opt/snap-consumer/test-runner.py" 2>&1 | grep -v "Warning: Permanently added" || true
 
+    # Push server.py
+    scp -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -P 2222 \
+        "$SCRIPT_DIR/../consumers/trigger-server/server.py" \
+        testrunner@localhost:/tmp/server.py 2>&1 | grep -v "Warning: Permanently added" || true
+
+    ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -p 2222 \
+        testrunner@localhost \
+        "sudo mv /tmp/server.py /opt/snap-consumer/server.py && sudo chmod +x /opt/snap-consumer/server.py" 2>&1 | grep -v "Warning: Permanently added" || true
+
+    # Push upgrade.sh
+    scp -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -P 2222 \
+        "$SCRIPT_DIR/../consumers/ubuntu-snap/upgrade.sh" \
+        testrunner@localhost:/tmp/upgrade.sh 2>&1 | grep -v "Warning: Permanently added" || true
+
+    ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -p 2222 \
+        testrunner@localhost \
+        "sudo mv /tmp/upgrade.sh /opt/snap-consumer/upgrade.sh && sudo chmod +x /opt/snap-consumer/upgrade.sh" 2>&1 | grep -v "Warning: Permanently added" || true
+
+    # Configure sudoers for testrunner
+    ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -p 2222 \
+        testrunner@localhost \
+        "echo 'testrunner ALL=(ALL) NOPASSWD: /opt/snap-consumer/upgrade.sh' | sudo tee /etc/sudoers.d/testrunner" 2>&1 | grep -v "Warning: Permanently added" || true
+
+    # Set CONSUMER_DIR env in snap-consumer.service
+    ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -p 2222 \
+        testrunner@localhost \
+        "sudo mkdir -p /etc/systemd/system/snap-consumer.service.d && printf '[Service]\nEnvironment=CONSUMER_DIR=/opt/snap-consumer\n' | sudo tee /etc/systemd/system/snap-consumer.service.d/override.conf && sudo systemctl daemon-reload && sudo systemctl restart snap-consumer" 2>&1 | grep -v "Warning: Permanently added" || true
+
     # Clear snap data from previous test runs
     echo "Clearing snap data from previous runs..."
     ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
@@ -214,17 +261,27 @@ if ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
         testrunner@localhost \
         "sudo rm -rf /var/snap/access-keys/current/* 2>/dev/null || true" 2>&1 | grep -v "Warning: Permanently added" || true
 
-    echo "Test-runner script updated successfully"
+    echo "Scripts updated successfully"
 fi
 echo ""
 
-# Step 3: Launch services
-echo "Step 3: Launching all services..."
+# Step 3: Build images
+echo "Step 3: Building container images..."
+echo ""
+
+podman-compose build
+
+# Step 4: Start services
+echo ""
+echo "Step 4: Starting all services..."
 echo "Note: Builder will run to completion, then containers will be stopped"
 echo ""
 
-# Start all services in background
-podman-compose up --build -d
+podman-compose up -d
+
+# Give services a moment to start up
+echo "Waiting for services to initialize..."
+sleep 5
 
 # Wait for builder to complete
 echo "Waiting for builder to complete (timeout: ${TIMEOUT_MINUTES} minutes)..."

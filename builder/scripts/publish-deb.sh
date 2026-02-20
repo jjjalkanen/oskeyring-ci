@@ -5,7 +5,7 @@ echo "=========================================="
 echo "Publishing to Debian registry"
 echo "=========================================="
 
-BINARY="/output/access-keys-systemd"
+BINARY="output/access-keys-systemd"
 PKG_NAME="access-keys"
 VERSION="0.1.0"
 REGISTRY="http://deb-registry:8082"
@@ -31,19 +31,19 @@ Description: Access keys test application
 EOF
 
 # Copy binary
-cp ${BINARY} ${DEB_DIR}/usr/bin/
+cp ${BINARY} ${DEB_DIR}/usr/bin/access-keys
 chmod +x ${DEB_DIR}/usr/bin/access-keys
 
 # Build deb package
-dpkg-deb --build ${DEB_DIR} /output/deb/${PKG_NAME}_${VERSION}_amd64.deb
+dpkg-deb --build ${DEB_DIR} output/deb/${PKG_NAME}_${VERSION}_amd64.deb
 
 # Upload .deb to pool
-curl --upload-file /output/deb/${PKG_NAME}_${VERSION}_amd64.deb \
+curl --upload-file output/deb/${PKG_NAME}_${VERSION}_amd64.deb \
     ${REGISTRY}/debian/pool/main/${PKG_NAME}_${VERSION}_amd64.deb
 
 # Create local repository structure with correct paths
 mkdir -p /tmp/apt-repo/pool/main
-cp /output/deb/${PKG_NAME}_${VERSION}_amd64.deb /tmp/apt-repo/pool/main/
+cp output/deb/${PKG_NAME}_${VERSION}_amd64.deb /tmp/apt-repo/pool/main/
 
 # Generate Packages file with correct pool/main paths
 cd /tmp/apt-repo

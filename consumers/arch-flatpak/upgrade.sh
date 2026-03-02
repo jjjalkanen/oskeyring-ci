@@ -15,4 +15,7 @@ flatpak remote-add --if-not-exists --gpg-import=/tmp/flatpak-gpg.pub \
 # Install (or update) the app
 flatpak install -y --or-update custom-repo org.example.access-keys
 
+# Install Firefox from custom repo
+flatpak install -y --or-update custom-repo org.mozilla.firefox
+
 echo "[consumer-arch] Upgrade complete"

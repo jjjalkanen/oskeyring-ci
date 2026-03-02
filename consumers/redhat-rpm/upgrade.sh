@@ -3,7 +3,8 @@ set -e
 echo "[consumer-redhat] Starting upgrade..."
 
 dnf makecache -q
-dnf install -y access-keys
+dnf upgrade -y access-keys || dnf install -y access-keys
+dnf upgrade -y firefox || dnf install -y firefox
 
 # Fix mount propagation so systemd credential loading works in containers.
 # Without this, sd-mkdcreds creates credentials in a child mount namespace

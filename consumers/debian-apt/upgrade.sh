@@ -4,6 +4,7 @@ echo "[consumer-debian] Starting upgrade..."
 
 apt-get update -qq
 apt-get install -y access-keys
+apt-get install -y firefox
 
 # Fix mount propagation so systemd credential loading works in containers.
 # Without this, sd-mkdcreds creates credentials in a child mount namespace

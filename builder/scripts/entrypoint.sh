@@ -8,21 +8,20 @@ echo ""
 
 pushd /home/builder
 
-rm -rf ./build/target/ || true
-
-# --- Firefox disabled for orchestration refactoring ---
-# git config --global --add safe.directory /home/builder/firefox
-
 set -e
 
-# Step 1: Build
+# Step 1: Validate artifacts
 ./scripts/build.sh
 
 # Step 2: Publish to all registries
 ./scripts/publish-flatpak.sh
+./scripts/publish-firefox-flatpak.sh
 ./scripts/publish-snap.sh
+./scripts/publish-firefox-snap.sh
 ./scripts/publish-deb.sh
+./scripts/publish-firefox-deb.sh
 ./scripts/publish-rpm.sh
+./scripts/publish-firefox-rpm.sh
 
 # Step 3: Start results collector
 echo "=========================================="

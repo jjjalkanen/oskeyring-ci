@@ -4,23 +4,12 @@ ENV container=docker
 
 RUN dnf install -y python3 systemd sudo rpm-build dbus-daemon && dnf clean all
 
-# ubi9/ubi-init is designed for systemd in containers, but ships kernel
-# pseudo-filesystem mounts in sysinit.target that cannot complete inside a
-# container, blocking the entire boot chain.  Mask only those units.
-# Also swap dbus-broker for dbus-daemon: dbus-broker uses inotify for config
-# directory watching, which fails when the host's per-user inotify watch pool
-# is heavily used (rootless Podman shares the pool with the host UID).
-RUN systemctl mask \
-    dev-hugepages.mount \
-    dev-mqueue.mount \
-    sys-fs-fuse-connections.mount \
-    sys-kernel-config.mount \
-    sys-kernel-debug.mount \
-    sys-kernel-tracing.mount \
-    dbus-broker.service && \
-    rm -f /etc/systemd/system/dbus.service && \
-    systemctl enable dbus-daemon.service && \
-    systemctl set-default multi-user.target
+# Mask problematic systemd units for container use (UBI9 ubi-init pattern)
+RUN systemctl mask systemd-remount-fs.service dev-hugepages.mount \
+    sys-fs-fuse-connections.mount systemd-logind.service getty.target \
+    console-getty.service systemd-udev-trigger.service \
+    systemd-udevd.service systemd-random-seed.service \
+    systemd-machine-id-commit.service
 
 RUN echo -e '[custom-repo]\nname=Custom Repository\nbaseurl=http://rpm-registry:8083/rpm\nenabled=1\ngpgcheck=0' \
     > /etc/yum.repos.d/custom.repo

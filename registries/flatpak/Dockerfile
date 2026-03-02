@@ -29,6 +29,9 @@ RUN echo 'server { \
     } \
 }' > /etc/nginx/sites-available/default
 
+COPY flatpak-entrypoint.sh /flatpak-entrypoint.sh
+RUN chmod +x /flatpak-entrypoint.sh
+
 EXPOSE 8080
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["/flatpak-entrypoint.sh"]

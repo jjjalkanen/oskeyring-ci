@@ -4,6 +4,40 @@ set -e
 VM_NAME="snap-consumer-vm"
 VM_PID_FILE="/tmp/${VM_NAME}.pid"
 
+usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --build-only   Run only the Firefox build (./mach build), then exit."
+    echo "                 Skips canary app, packaging, VM, and containers."
+    echo "  --no-build     Skip ./mach build; use existing build artifacts for packaging."
+    echo "                 Canary app is still built."
+    echo "  --force-build  Proceed even if active mozconfig differs from both"
+    echo "                 canonical configs, or if stored objdir configs mismatch."
+    echo "  -h, --help     Show this help message."
+}
+
+# Compare mozconfigs ignoring blank lines, trailing whitespace, and line order
+diff_mozconfigs() {
+    local flag="$1" file_a="$2" file_b="$3"
+    clean() { grep -v '^[[:space:]]*$' "$1" | sed 's/[[:space:]]*$//' | sort; }
+    diff "$flag" <(clean "$file_a") <(clean "$file_b")
+}
+
+# Parse flags
+BUILD_ONLY=false
+NO_BUILD=false
+FORCE_BUILD=false
+for arg in "$@"; do
+    case "$arg" in
+        --build-only)  BUILD_ONLY=true ;;
+        --no-build)    NO_BUILD=true ;;
+        --force-build) FORCE_BUILD=true ;;
+        -h|--help)     usage; exit 0 ;;
+        *)             echo "Unknown option: $arg"; echo ""; usage; exit 1 ;;
+    esac
+done
+
 echo "=========================================="
 echo "Podman Container Orchestration"
 echo "=========================================="
@@ -132,8 +166,9 @@ CLEANUP_DONE=false
 cleanup() {
     if [ "$CLEANUP_DONE" = true ]; then return; fi
     CLEANUP_DONE=true
+    if [ "$BUILD_ONLY" = true ]; then return; fi
     echo "Cleaning up..."
-    podman-compose down --timeout 10 2>/dev/null || {
+    podman-compose --in-pod=0 down --timeout 10 2>/dev/null || {
         podman stop -a -t 5 2>/dev/null || true
         podman rm -a -f 2>/dev/null || true
     }
@@ -143,20 +178,26 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Run prerequisite checks
-check_prerequisites
-check_vm_prerequisites
+if [ "$BUILD_ONLY" = true ]; then
+    echo "Build-only mode: skipping prerequisite checks and VM setup"
+    echo ""
+else
+    check_prerequisites
+    check_vm_prerequisites
 
-# Step 1: Create network
-echo "Step 1: Creating network..."
-./scripts/create-network.sh
-echo ""
+    # Step 1: Create network
+    echo "Step 1: Creating network..."
+    ./scripts/create-network.sh
+    echo ""
 
-# Step 2: Start VM
-echo "Step 2: Starting snap consumer VM..."
-reset_vm_state
-start_vm
-echo ""
+    # Step 2: Start VM
+    echo "Step 2: Starting snap consumer VM..."
+    reset_vm_state
+    start_vm
+    echo ""
+fi
 
+if [ "$BUILD_ONLY" != true ]; then
 # Step 2.5: Update scripts in VM
 echo "Step 2.5: Updating scripts in VM..."
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -264,20 +305,186 @@ if ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
     echo "Scripts updated successfully"
 fi
 echo ""
+fi  # end BUILD_ONLY != true
 
-# Step 3: Build images
-echo "Step 3: Building container images..."
+# Step 3: Build on host
+echo "Step 3: Building on host..."
 echo ""
 
-podman-compose build
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$SCRIPT_DIR/.."
+mkdir -p "$PROJECT_DIR/dist"
 
-# Step 4: Start services
+CANONICAL_MOZCONFIG="$PROJECT_DIR/builder/scripts/firefox-mozconfig"
+RHEL9_MOZCONFIG="$PROJECT_DIR/builder/scripts/firefox-mozconfig-rhel9"
+
+# Ensure bootstrapped tools (llvm-objdump, etc.) are on PATH
+if [ -d "$HOME/.mozbuild/clang/bin" ]; then
+    export PATH="$HOME/.mozbuild/clang/bin:$PATH"
+fi
+
+# Step 3a: Mozconfig resolution check (host-native)
+echo "Step 3a: Checking mozconfig (host-native)..."
+cd "$PROJECT_DIR/firefox"
+
+if [ -n "${MOZCONFIG:-}" ]; then
+    EFFECTIVE_MOZCONFIG="$MOZCONFIG"
+elif [ -f "$PROJECT_DIR/firefox/mozconfig" ]; then
+    EFFECTIVE_MOZCONFIG="$PROJECT_DIR/firefox/mozconfig"
+elif [ -f "$PROJECT_DIR/firefox/.mozconfig" ]; then
+    EFFECTIVE_MOZCONFIG="$PROJECT_DIR/firefox/.mozconfig"
+else
+    EFFECTIVE_MOZCONFIG=""
+fi
+
+if [ -z "$EFFECTIVE_MOZCONFIG" ]; then
+    echo "No mozconfig found. Defaulting to builder/scripts/firefox-mozconfig."
+    export MOZCONFIG="$CANONICAL_MOZCONFIG"
+    MATCHED_CONFIG="canonical"
+elif diff_mozconfigs -q "$EFFECTIVE_MOZCONFIG" "$CANONICAL_MOZCONFIG" >/dev/null 2>&1; then
+    MATCHED_CONFIG="canonical"
+elif diff_mozconfigs -q "$EFFECTIVE_MOZCONFIG" "$RHEL9_MOZCONFIG" >/dev/null 2>&1; then
+    MATCHED_CONFIG="rhel9"
+else
+    echo "ERROR: Active mozconfig matches neither firefox-mozconfig nor firefox-mozconfig-rhel9:"
+    echo "  --- vs firefox-mozconfig ---"
+    diff_mozconfigs -u "$EFFECTIVE_MOZCONFIG" "$CANONICAL_MOZCONFIG" || true
+    echo "  --- vs firefox-mozconfig-rhel9 ---"
+    diff_mozconfigs -u "$EFFECTIVE_MOZCONFIG" "$RHEL9_MOZCONFIG" || true
+    if [ "$FORCE_BUILD" = true ]; then
+        echo "  --force-build: overriding with builder/scripts/firefox-mozconfig"
+        export MOZCONFIG="$CANONICAL_MOZCONFIG"
+        MATCHED_CONFIG="canonical"
+    else
+        echo "Update your mozconfig to match one of them, or pass --force-build to override."
+        exit 1
+    fi
+fi
+
+# Cross-check the other objdir's stored .mozconfig
+if [ "$MATCHED_CONFIG" = "canonical" ]; then
+    OTHER_OBJDIR="$PROJECT_DIR/obj-fx-rhel9"
+    OTHER_CANONICAL="$RHEL9_MOZCONFIG"
+    OTHER_LABEL="firefox-mozconfig-rhel9"
+else
+    OTHER_OBJDIR="$PROJECT_DIR/obj-fx-dbg"
+    OTHER_CANONICAL="$CANONICAL_MOZCONFIG"
+    OTHER_LABEL="firefox-mozconfig"
+fi
+
+echo "Active mozconfig matched: $MATCHED_CONFIG"
+
+if [ -f "$OTHER_OBJDIR/.mozconfig" ]; then
+    if ! diff_mozconfigs -q "$OTHER_OBJDIR/.mozconfig" "$OTHER_CANONICAL" >/dev/null 2>&1; then
+        echo "ERROR: Stored config in $OTHER_OBJDIR/.mozconfig differs from $OTHER_LABEL."
+        echo "A rebuild would clobber. Pass --force-build to override."
+        diff_mozconfigs -u "$OTHER_OBJDIR/.mozconfig" "$OTHER_CANONICAL" || true
+        if [ "$FORCE_BUILD" != true ]; then
+            exit 1
+        fi
+        echo "  --force-build: proceeding despite stored config mismatch"
+    fi
+fi
 echo ""
-echo "Step 4: Starting all services..."
+
+# Step 3b: Firefox builds (unless --no-build)
+if [ "$NO_BUILD" != true ]; then
+    # Step 3b-1: Host-native Firefox build (for DEB, Flatpak, Snap)
+    echo "Step 3b-1: Building Firefox (host-native)..."
+    export MOZCONFIG="$CANONICAL_MOZCONFIG"
+    env -u CLAUDECODE ./mach build
+
+    # Step 3b-2: RHEL9-targeted Firefox build (for RPM)
+    echo ""
+    echo "Step 3b-2: Building Firefox (RHEL9-targeted)..."
+    if [ ! -f "$PROJECT_DIR/dist/onnxruntime-rhel9/libonnxruntime.so" ]; then
+        echo "ERROR: RHEL9 onnxruntime not found at dist/onnxruntime-rhel9/libonnxruntime.so"
+        echo "Run ./scripts/build-onnxruntime-rhel9.sh first."
+        exit 1
+    fi
+    export MOZCONFIG="$RHEL9_MOZCONFIG"
+    env -u CLAUDECODE ./mach build
+
+    if [ "$BUILD_ONLY" = true ]; then
+        echo "Firefox builds complete (host-native + RHEL9)."
+        exit 0
+    fi
+else
+    echo "Step 3b: Skipping Firefox build (--no-build)"
+fi
+echo ""
+
+# Step 3c: Build canary app (4 variants)
+echo "Step 3c: Building canary app (4 variants)..."
+cd "$PROJECT_DIR/app"
+
+echo "  Building default binary..."
+cargo build --release
+cp target/release/access-keys "$PROJECT_DIR/dist/access-keys"
+
+echo "  Building snap binary..."
+cargo build --release --features snap
+cp target/release/access-keys "$PROJECT_DIR/dist/access-keys-snap"
+
+echo "  Building flatpak binary..."
+cargo build --release --features flatpak
+cp target/release/access-keys "$PROJECT_DIR/dist/access-keys-flatpak"
+
+echo "  Building systemd binary..."
+cargo build --release --features systemd
+cp target/release/access-keys "$PROJECT_DIR/dist/access-keys-systemd"
+
+echo ""
+
+# Step 3d: Package Firefox (both host-native and RHEL9)
+echo "Step 3d: Packaging Firefox..."
+cd "$PROJECT_DIR/firefox"
+
+# Package host-native build (for DEB, Flatpak, Snap)
+echo "  Packaging host-native build..."
+export MOZCONFIG="$CANONICAL_MOZCONFIG"
+env -u CLAUDECODE ./mach package
+cp "$PROJECT_DIR/obj-fx-dbg/dist"/firefox-*.tar.xz "$PROJECT_DIR/dist/firefox.tar.xz"
+
+# Package RHEL9 build (for RPM)
+echo "  Packaging RHEL9 build..."
+export MOZCONFIG="$RHEL9_MOZCONFIG"
+env -u CLAUDECODE ./mach package
+cp "$PROJECT_DIR/obj-fx-rhel9/dist"/firefox-*.tar.xz "$PROJECT_DIR/dist/firefox-rhel9.tar.xz"
+
+cd "$PROJECT_DIR"
+
+echo ""
+echo "Step 3e: Validating artifacts..."
+MISSING=0
+for artifact in access-keys access-keys-snap access-keys-flatpak access-keys-systemd firefox.tar.xz firefox-rhel9.tar.xz; do
+    if [ ! -f "$PROJECT_DIR/dist/$artifact" ]; then
+        echo "  MISSING: dist/$artifact"
+        MISSING=1
+    else
+        echo "  OK: dist/$artifact"
+    fi
+done
+if [ $MISSING -ne 0 ]; then
+    echo "ERROR: Host build produced incomplete artifacts"
+    exit 1
+fi
+echo "Host build complete."
+echo ""
+
+# Step 4: Build images
+echo "Step 4: Building container images..."
+echo ""
+
+podman-compose --in-pod=0 build
+
+# Step 5: Start services
+echo ""
+echo "Step 5: Starting all services..."
 echo "Note: Builder will run to completion, then containers will be stopped"
 echo ""
 
-podman-compose up -d
+podman-compose --in-pod=0 up -d --force-recreate
 
 # Give services a moment to start up
 echo "Waiting for services to initialize..."
@@ -308,7 +515,7 @@ BUILDER_EXIT=$(podman inspect builder --format '{{.State.ExitCode}}')
 # Stop all services
 echo ""
 echo "Stopping all services..."
-podman-compose down
+podman-compose --in-pod=0 down
 
 # Return builder's exit code
 if [ "$BUILDER_EXIT" -eq 0 ]; then

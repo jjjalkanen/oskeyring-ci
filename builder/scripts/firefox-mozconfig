@@ -1,0 +1,11 @@
+mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/../obj-fx-dbg
+ac_add_options --enable-application=browser
+ac_add_options --enable-debug
+ac_add_options --enable-debug-symbols
+ac_add_options --disable-tests
+ac_add_options --enable-warnings-as-errors
+ac_add_options --with-ccache=buildcache
+ac_add_options --enable-bootstrap=no-update
+ac_add_options --enable-geckodriver
+ac_add_options --enable-stdcxx-compat
+

@@ -89,18 +89,12 @@ services:
     image: builder:latest
     build:
       context: .
-      # --- Firefox disabled for orchestration refactoring ---
-      # additional_contexts:
-      #   main_firefox: /home/jjj/firefox
       dockerfile: builder/Dockerfile
     container_name: builder
     privileged: true  # Required for flatpak build operations
+    userns_mode: keep-id
     volumes:
-      - ./app:/home/builder/build:U
-      - ./cache:/home/builder/.cache/sccache:U
-      # --- Firefox disabled for orchestration refactoring ---
-      # - ./firefox:/home/builder/firefox:U
-      # /home/jjj/firefox/.git:/home/builder/firefox/.git:U,ro
+      - ./dist:/home/builder/output:U
     ports:
       - "9999:9999"
     networks:

@@ -5,7 +5,7 @@ echo "=========================================="
 echo "Publishing to RPM registry"
 echo "=========================================="
 
-BINARY="output/access-keys-systemd"
+BINARY="output/access-keys"
 PKG_NAME="access-keys"
 VERSION="0.1.0"
 

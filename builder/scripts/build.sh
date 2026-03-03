@@ -9,9 +9,6 @@ OUTPUT_DIR="/home/builder/output"
 
 ARTIFACTS=(
     "access-keys"
-    "access-keys-snap"
-    "access-keys-flatpak"
-    "access-keys-systemd"
     "firefox.tar.xz"
 )
 

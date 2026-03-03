@@ -5,7 +5,7 @@ echo "=========================================="
 echo "Publishing to Snap registry"
 echo "=========================================="
 
-BINARY="output/access-keys-snap"
+BINARY="output/access-keys"
 
 # Wait for registry to be available
 timeout 60 bash -c 'until curl -s http://snap-registry:8081/ > /dev/null; do sleep 1; done'

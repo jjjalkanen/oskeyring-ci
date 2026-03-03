@@ -414,25 +414,12 @@ else
 fi
 echo ""
 
-# Step 3c: Build canary app (4 variants)
-echo "Step 3c: Building canary app (4 variants)..."
+# Step 3c: Build canary app (single unified binary)
+echo "Step 3c: Building canary app..."
 cd "$PROJECT_DIR/app"
 
-echo "  Building default binary..."
 cargo build --release
 cp target/release/access-keys "$PROJECT_DIR/dist/access-keys"
-
-echo "  Building snap binary..."
-cargo build --release --features snap
-cp target/release/access-keys "$PROJECT_DIR/dist/access-keys-snap"
-
-echo "  Building flatpak binary..."
-cargo build --release --features flatpak
-cp target/release/access-keys "$PROJECT_DIR/dist/access-keys-flatpak"
-
-echo "  Building systemd binary..."
-cargo build --release --features systemd
-cp target/release/access-keys "$PROJECT_DIR/dist/access-keys-systemd"
 
 echo ""
 
@@ -457,7 +444,7 @@ cd "$PROJECT_DIR"
 echo ""
 echo "Step 3e: Validating artifacts..."
 MISSING=0
-for artifact in access-keys access-keys-snap access-keys-flatpak access-keys-systemd firefox.tar.xz firefox-rhel9.tar.xz; do
+for artifact in access-keys firefox.tar.xz firefox-rhel9.tar.xz; do
     if [ ! -f "$PROJECT_DIR/dist/$artifact" ]; then
         echo "  MISSING: dist/$artifact"
         MISSING=1

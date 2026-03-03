@@ -5,7 +5,7 @@ echo "=========================================="
 echo "Publishing to Flatpak registry"
 echo "=========================================="
 
-BINARY="output/access-keys-flatpak"
+BINARY="output/access-keys"
 APP_ID="org.example.access-keys"
 REGISTRY="http://flatpak-registry:8080"
 

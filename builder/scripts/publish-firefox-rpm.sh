@@ -48,6 +48,18 @@ URL:            https://www.mozilla.org/firefox/
 %description
 Mozilla Firefox is a free and open-source web browser developed by Mozilla.
 
+%post
+# Credential setup — mirrors upstream firefox.spec.j2 %post section.
+# See firefox/browser/installer/linux/app/rpm/firefox.spec.j2
+if command -v systemd-creds >/dev/null 2>&1 && [ ! -f /etc/%{name}/sync.cred ]; then
+    systemd-creds setup 2>/dev/null || true
+    mkdir -p /etc/%{name}
+    printf '%%s' "firefox-sync-secret" > /tmp/raw-firefox-sync.key
+    systemd-creds encrypt --name=firefox-sync-key --with-key=host \
+        /tmp/raw-firefox-sync.key /etc/%{name}/sync.cred 2>/dev/null || true
+    rm -f /tmp/raw-firefox-sync.key
+fi
+
 %install
 mkdir -p %{buildroot}/usr/lib/firefox
 cp -a ${RPM_DIR}/BUILD/usr/lib/firefox/. %{buildroot}/usr/lib/firefox/

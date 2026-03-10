@@ -1,0 +1,17 @@
+[Unit]
+Description=Container-specific workarounds for systemd credentials
+Before=trigger-server.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Fix mount propagation so systemd credential loading works in containers.
+# Without this, sd-mkdcreds creates credentials in a child mount namespace
+# that vanishes on exit.  See https://github.com/systemd/systemd/issues/38103
+ExecStart=/bin/mount --make-rshared /
+# Ensure systemd host key exists (idempotent - only creates if missing)
+ExecStart=/bin/bash -c "systemd-creds setup 2>/dev/null || true"
+
+[Install]
+WantedBy=multi-user.target

@@ -37,6 +37,12 @@ RUN useradd -m consumer
 RUN echo 'consumer ALL=(ALL) NOPASSWD: /home/consumer/upgrade.sh, /usr/bin/systemd-run' \
     > /etc/sudoers.d/consumer
 
+# Container-specific workaround: fix mount propagation for systemd
+# credential loading. Not needed on real systems.
+# See https://github.com/systemd/systemd/issues/38103
+COPY debian-apt/container-init.service /etc/systemd/system/container-init.service
+RUN systemctl enable container-init.service
+
 # Trigger server service (runs as consumer user)
 COPY debian-apt/trigger-server.service /etc/systemd/system/trigger-server.service
 RUN systemctl enable trigger-server.service && \

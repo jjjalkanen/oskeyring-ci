@@ -196,6 +196,23 @@ def test_systemd_storage():
 
     return len(errors) == 0, errors
 
+def test_firefox_credentials():
+    """Verify Firefox credential resources exist (created by package installer)"""
+    errors = []
+    consumer_name = os.environ.get('CONSUMER_NAME', 'unknown')
+
+    if consumer_name in ('consumer-debian', 'consumer-redhat'):
+        if not os.path.exists('/etc/firefox/sync.cred'):
+            errors.append("/etc/firefox/sync.cred not created by package installer")
+
+    elif consumer_name == 'consumer-ubuntu':
+        if not os.path.exists('/var/snap/firefox/current/sync.key'):
+            errors.append("/var/snap/firefox/current/sync.key not created by snap install hook")
+
+    # consumer-arch (flatpak): Secret Portal is runtime-only, no file to check
+
+    return len(errors) == 0, errors
+
 def run_test():
     consumer_name = os.environ.get('CONSUMER_NAME', 'unknown')
 
@@ -208,6 +225,8 @@ def run_test():
         if is_flatpak:
             # Run flatpak-specific test
             success, errors = test_flatpak_storage()
+
+            # Flatpak: Secret Portal is runtime-only, no Firefox credential file to check
 
             if success:
                 return {
@@ -227,6 +246,12 @@ def run_test():
             # Run snap-specific test
             success, errors = test_snap_storage()
 
+            # Run Firefox credential test
+            ff_success, ff_errors = test_firefox_credentials()
+            if not ff_success:
+                success = False
+                errors.extend(ff_errors)
+
             if success:
                 return {
                     "consumer": consumer_name,
@@ -244,6 +269,12 @@ def run_test():
         elif is_systemd:
             # Run systemd-specific test
             success, errors = test_systemd_storage()
+
+            # Run Firefox credential test
+            ff_success, ff_errors = test_firefox_credentials()
+            if not ff_success:
+                success = False
+                errors.extend(ff_errors)
 
             if success:
                 return {

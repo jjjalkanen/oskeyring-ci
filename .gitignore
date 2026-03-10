@@ -32,3 +32,5 @@ cache/*
 
 # Firefox source and build artifacts
 firefox/
+obj-fx-*/
+dist/

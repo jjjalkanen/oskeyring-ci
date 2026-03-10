@@ -30,6 +30,9 @@ RUN flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/f
 COPY --chown=builder:builder builder/scripts/ scripts/
 RUN chmod u+x scripts/*.sh scripts/*.py
 
+# Copy upstream Firefox installer templates (used by publish scripts)
+COPY --chown=builder:builder firefox/browser/installer/linux/app/ firefox/browser/installer/linux/app/
+
 WORKDIR /home/builder
 
 ENTRYPOINT ["/home/builder/scripts/entrypoint.sh"]

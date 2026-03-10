@@ -41,6 +41,12 @@ Description: Mozilla Firefox Web Browser
  Firefox is a free and open-source web browser developed by Mozilla.
 EOF
 
+# Include upstream postinst (process Makefile $$ escaping and substitute PKG_NAME)
+sed 's/\$\$/$/g; s/${PKG_NAME}/firefox/g' \
+    /home/builder/firefox/browser/installer/linux/app/debian/postinst.in \
+    > "${DEB_DIR}/DEBIAN/postinst"
+chmod 755 "${DEB_DIR}/DEBIAN/postinst"
+
 # Copy Firefox files
 echo "Copying Firefox files into deb structure..."
 cp -a "${EXTRACT_DIR}/firefox/." "${DEB_DIR}/usr/lib/firefox/"

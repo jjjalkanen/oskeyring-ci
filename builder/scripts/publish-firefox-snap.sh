@@ -55,6 +55,22 @@ exec "$SNAP/lib/firefox/firefox" "$@"
 WRAPPER
 chmod +x "${SNAP_DIR}/bin/firefox"
 
+# Copy install hook from upstream Firefox installer template.
+#
+# Layout translation: in the snapcraft *source* layout, hooks live at
+# snap/hooks/<name>.  In the snap *runtime* format (the .snap squashfs),
+# they live at meta/hooks/<name>.  Our publish script builds the runtime
+# format directly with mksquashfs (we don't use snapcraft), so we place
+# the hook at meta/hooks/install.
+#
+# Source: firefox/browser/installer/linux/app/snap/hooks/install
+mkdir -p "${SNAP_DIR}/meta/hooks"
+cp /home/builder/firefox/browser/installer/linux/app/snap/hooks/install \
+    "${SNAP_DIR}/meta/hooks/install"
+cp /home/builder/firefox/browser/installer/linux/app/snap/hooks/post-refresh \
+    "${SNAP_DIR}/meta/hooks/post-refresh"
+chmod +x "${SNAP_DIR}/meta/hooks/install" "${SNAP_DIR}/meta/hooks/post-refresh"
+
 # Create squashfs snap, published as firefox_latest_amd64.snap for stable URL
 SNAP_FILE="output/snap/firefox_latest_amd64.snap"
 echo "Creating Firefox snap..."

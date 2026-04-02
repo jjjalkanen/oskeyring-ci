@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use ashpd::desktop::secret::Secret;
+use base64::Engine as _;
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -223,13 +224,13 @@ fn run_systemd_storage() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Secret file is empty".into());
     }
 
-    let secret = String::from_utf8_lossy(&buffer);
-    let display_secret = if secret.len() > 20 {
-        &secret[..20]
-    } else {
-        &secret
-    };
-    println!("Secret read from CREDENTIALS_DIRECTORY: {}", display_secret);
+    let b64_str = std::str::from_utf8(&buffer)
+        .map_err(|_| "sync-key credential is not valid UTF-8")?
+        .trim();
+    let key_bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64_str)
+        .map_err(|e| format!("sync-key base64 decode failed: {}", e))?;
+    println!("Secret read from CREDENTIALS_DIRECTORY: {} bytes", key_bytes.len());
 
     Ok(())
 }

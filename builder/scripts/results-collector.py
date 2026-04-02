@@ -2,12 +2,15 @@
 import http.server
 import socketserver
 import json
+import os
 import threading
 import sys
 from datetime import datetime
 
 PORT = 9999
-EXPECTED_CONSUMERS = ['consumer-arch', 'consumer-debian', 'consumer-redhat', 'consumer-ubuntu']
+_env = os.environ.get('ENABLED_CONSUMERS', '')
+EXPECTED_CONSUMERS = [c.strip() for c in _env.split(',') if c.strip()] if _env else \
+    ['consumer-arch', 'consumer-debian', 'consumer-redhat', 'consumer-ubuntu']
 
 results = {}
 results_lock = threading.Lock()
@@ -27,6 +30,16 @@ class ResultsHandler(http.server.BaseHTTPRequestHandler):
                     results[consumer] = report
                     print(f"\n[COLLECTOR] Received report from {consumer}: {report.get('status')}")
                     print(f"[COLLECTOR] Reports received: {len(results)}/{len(EXPECTED_CONSUMERS)}")
+
+                    # Save raw WPT report if present
+                    wpt = report.get('wpt', {})
+                    raw = wpt.get('raw_report')
+                    if raw:
+                        os.makedirs('/home/builder/wpt-reports', exist_ok=True)
+                        path = f'/home/builder/wpt-reports/{consumer}.json'
+                        with open(path, 'w') as rf:
+                            json.dump(raw, rf)
+                        print(f"[COLLECTOR] Saved WPT report to {path}")
 
                     # Check if all consumers have reported
                     if len(results) >= len(EXPECTED_CONSUMERS):
@@ -70,6 +83,34 @@ def print_summary():
             if error:
                 print(f"  Error: {error}")
 
+            # IDB results (informational)
+            if 'idb_plaintext' in report or 'idb_encrypted' in report:
+                for key, label in [('idb_plaintext', 'IDB plaintext'), ('idb_encrypted', 'IDB encrypted')]:
+                    idb = report.get(key)
+                    if idb:
+                        idb_st = idb.get('idb_status', 'unknown')
+                        print(f"  {label}: {idb_st} ({idb.get('details', '')})")
+                        if idb.get('firefox_exit_code') not in (None, 0, -15):
+                            print(f"    Firefox exit: {idb['firefox_exit_code']}")
+                        if idb.get('firefox_stderr'):
+                            print(f"    Stderr: {idb['firefox_stderr'][-500:]}")
+
+            # WPT results (informational — don't flip overall status)
+            if 'wpt' in report:
+                wpt = report['wpt']
+                wpt_st = wpt.get('wpt_status', 'unknown').upper()
+                print(f"  WPT: {wpt_st}")
+                smoke = wpt.get('wpt_smoke', {})
+                if smoke:
+                    print(f"    Smoke: {smoke.get('pass',0)}/{smoke.get('total',0)} passed")
+                full = wpt.get('wpt_full', {})
+                if full:
+                    print(f"    Full: {full.get('pass',0)}/{full.get('total',0)} passed")
+                for f in wpt.get('wpt_failures', [])[:10]:
+                    print(f"    FAIL: {f}")
+                if wpt.get('wpt_log'):
+                    print(f"    Log (last 500 chars): {wpt['wpt_log'][-500:]}")
+
             if status != "pass":
                 all_passed = False
         else:
@@ -98,8 +139,8 @@ if __name__ == "__main__":
 
     print(f"[COLLECTOR] Results collector listening on port {PORT}")
 
-    # Wait for all consumers to report (or timeout after 10 minutes)
-    if all_reported.wait(timeout=600):
+    # Wait for all consumers to report (or timeout after 20 minutes)
+    if all_reported.wait(timeout=1200):
         print(f"[COLLECTOR] All consumers have reported")
     else:
         print(f"[COLLECTOR] Timeout waiting for all consumers")

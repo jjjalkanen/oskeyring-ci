@@ -5,9 +5,11 @@ Wants=snapd.socket
 
 [Service]
 Type=simple
+User=consumer
+Group=consumer
 Environment=CONSUMER_NAME=consumer-ubuntu
 ExecStartPre=/bin/sleep 3
-ExecStart=/entrypoint.sh
+ExecStart=/home/consumer/entrypoint.sh
 Restart=on-failure
 RestartSec=5
 

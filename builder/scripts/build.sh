@@ -9,7 +9,10 @@ OUTPUT_DIR="/home/builder/output"
 
 ARTIFACTS=(
     "access-keys"
+    "firefox-credential-server"
     "firefox.tar.xz"
+    "geckodriver"
+    "geckodriver-rhel9"
 )
 
 MISSING=0

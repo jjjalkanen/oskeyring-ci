@@ -1,12 +1,23 @@
 #!/bin/bash
 set -e
 
-CONSUMERS=(
-    "consumer-arch:9000"
-    "host.containers.internal:9002"
-    "consumer-debian:9000"
-    "consumer-redhat:9000"
+declare -A CONSUMER_ENDPOINTS=(
+    [consumer-arch]="consumer-arch:9000"
+    [consumer-debian]="consumer-debian:9000"
+    [consumer-redhat]="consumer-redhat:9000"
+    [consumer-ubuntu]="host.containers.internal:9002"
 )
+
+if [ -n "${ENABLED_CONSUMERS:-}" ]; then
+    IFS=',' read -ra ENABLED <<< "$ENABLED_CONSUMERS"
+else
+    ENABLED=(consumer-arch consumer-debian consumer-redhat consumer-ubuntu)
+fi
+
+CONSUMERS=()
+for name in "${ENABLED[@]}"; do
+    CONSUMERS+=("${CONSUMER_ENDPOINTS[$name]}")
+done
 
 echo "Checking consumer health..."
 for consumer in "${CONSUMERS[@]}"; do

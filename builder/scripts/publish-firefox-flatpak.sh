@@ -30,6 +30,11 @@ mkdir -p /tmp/firefox-flatpak/files/bin
 echo "Copying Firefox files into Flatpak structure..."
 cp -a "${EXTRACT_DIR}/firefox/." /tmp/firefox-flatpak/files/lib/firefox/
 
+# Include geckodriver
+cp /home/builder/output/geckodriver /tmp/firefox-flatpak/files/lib/firefox/geckodriver
+chmod +x /tmp/firefox-flatpak/files/lib/firefox/geckodriver
+ln -sf /app/lib/firefox/geckodriver /tmp/firefox-flatpak/files/bin/geckodriver
+
 # Create launcher script (mirrors firefox/browser/installer/linux/app/flatpak/files/bin/firefox)
 cat > /tmp/firefox-flatpak/files/bin/firefox << 'LAUNCHER'
 #!/bin/bash

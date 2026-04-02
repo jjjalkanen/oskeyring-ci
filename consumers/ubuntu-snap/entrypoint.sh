@@ -15,4 +15,4 @@ done
 snap wait system seed.loaded 2>/dev/null || echo "[consumer-ubuntu] Warning: snap wait failed"
 
 echo "[consumer-ubuntu] Starting trigger server..."
-exec python3 /server.py
+exec python3 /home/consumer/server.py

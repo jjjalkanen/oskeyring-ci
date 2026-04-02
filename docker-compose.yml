@@ -93,9 +93,12 @@ services:
     container_name: builder
     privileged: true  # Required for flatpak build operations
     userns_mode: keep-id
+    environment:
+      - ENABLED_CONSUMERS=${ENABLED_CONSUMERS:-}
     volumes:
       - ./dist:/home/builder/output:U
     ports:
+      - "8888:8888"
       - "9999:9999"
     networks:
       - default

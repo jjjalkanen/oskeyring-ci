@@ -37,6 +37,7 @@ Section: web
 Priority: optional
 Architecture: amd64
 Maintainer: Test <test@example.com>
+Depends: libgtk-3-0, libdbus-glib-1-2, libxt6, libasound2, libx11-xcb1, libx11-6, libxrender1, libxcomposite1, libxdamage1, libxfixes3, libxrandr2, libxi6, libxext6, libxss1, libxtst6, libpci3
 Description: Mozilla Firefox Web Browser
  Firefox is a free and open-source web browser developed by Mozilla.
 EOF
@@ -53,6 +54,63 @@ cp -a "${EXTRACT_DIR}/firefox/." "${DEB_DIR}/usr/lib/firefox/"
 
 # Create /usr/bin/firefox symlink pointing to the bundled binary
 ln -sf /usr/lib/firefox/firefox "${DEB_DIR}/usr/bin/firefox"
+
+# Include geckodriver
+cp /home/builder/output/geckodriver "${DEB_DIR}/usr/lib/firefox/geckodriver"
+chmod +x "${DEB_DIR}/usr/lib/firefox/geckodriver"
+ln -sf /usr/lib/firefox/geckodriver "${DEB_DIR}/usr/bin/geckodriver"
+
+# Include firefox-credential-server
+cp /home/builder/output/firefox-credential-server "${DEB_DIR}/usr/lib/firefox/firefox-credential-server"
+chmod +x "${DEB_DIR}/usr/lib/firefox/firefox-credential-server"
+
+# Include systemd unit
+mkdir -p "${DEB_DIR}/usr/lib/systemd/system"
+cat > "${DEB_DIR}/usr/lib/systemd/system/firefox-credential-server.service" << 'UNIT'
+[Unit]
+Description=Firefox Credential Server
+After=local-fs.target
+
+[Service]
+Type=simple
+LoadCredentialEncrypted=sync-key:/etc/firefox/sync.cred
+ExecStart=/usr/lib/firefox/firefox-credential-server
+RuntimeDirectory=firefox-credential-server
+RuntimeDirectoryMode=0755
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+LimitNOFILE=64
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+# Append credential setup to postinst
+cat >> "${DEB_DIR}/DEBIAN/postinst" << 'POSTINST'
+
+# Credential setup — generate 64-byte key for QuotaManager encryption
+if command -v systemd-creds >/dev/null 2>&1 && [ ! -f /etc/firefox/sync.cred ]; then
+    systemd-creds setup 2>/dev/null || true
+    mkdir -p /etc/firefox
+    head -c 64 /dev/urandom | systemd-creds encrypt --name=sync-key \
+        --with-key=host - /etc/firefox/sync.cred 2>/dev/null || true
+fi
+# Enable and start the credential server
+systemctl daemon-reload 2>/dev/null || true
+systemctl enable --now firefox-credential-server.service 2>/dev/null || true
+POSTINST
 
 # Build deb package
 DEB_FILE="output/deb/firefox_${FIREFOX_VERSION}_amd64.deb"

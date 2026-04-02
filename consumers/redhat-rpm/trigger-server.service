@@ -7,6 +7,7 @@ Type=simple
 User=consumer
 Group=consumer
 Environment=CONSUMER_NAME=consumer-redhat
+ExecStartPre=+/bin/sh -c 'cd /opt/wpt && python3 ./wpt make-hosts-file >> /etc/hosts'
 ExecStart=/usr/bin/python3 /home/consumer/server.py
 Restart=on-failure
 RestartSec=5

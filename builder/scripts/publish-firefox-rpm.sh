@@ -35,6 +35,47 @@ mkdir -p "${RPM_DIR}/BUILD/usr/bin"
 echo "Copying Firefox files into RPM build dir..."
 cp -a "${EXTRACT_DIR}/firefox/." "${RPM_DIR}/BUILD/usr/lib/firefox/"
 
+# Include geckodriver (RHEL9 build)
+cp /home/builder/output/geckodriver-rhel9 "${RPM_DIR}/BUILD/usr/lib/firefox/geckodriver"
+chmod +x "${RPM_DIR}/BUILD/usr/lib/firefox/geckodriver"
+
+# Include firefox-credential-server
+cp /home/builder/output/firefox-credential-server "${RPM_DIR}/BUILD/usr/lib/firefox/firefox-credential-server"
+chmod +x "${RPM_DIR}/BUILD/usr/lib/firefox/firefox-credential-server"
+
+# Include systemd unit
+mkdir -p "${RPM_DIR}/BUILD/usr/lib/systemd/system"
+cat > "${RPM_DIR}/BUILD/usr/lib/systemd/system/firefox-credential-server.service" << 'UNIT'
+[Unit]
+Description=Firefox Credential Server
+After=local-fs.target
+
+[Service]
+Type=simple
+LoadCredentialEncrypted=sync-key:/etc/firefox/sync.cred
+ExecStart=/usr/lib/firefox/firefox-credential-server
+RuntimeDirectory=firefox-credential-server
+RuntimeDirectoryMode=0755
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+LimitNOFILE=64
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
 # Create spec file
 cat > "${RPM_DIR}/SPECS/firefox.spec" << SPEC
 Name:           firefox
@@ -49,27 +90,32 @@ URL:            https://www.mozilla.org/firefox/
 Mozilla Firefox is a free and open-source web browser developed by Mozilla.
 
 %post
-# Credential setup — mirrors upstream firefox.spec.j2 %post section.
-# See firefox/browser/installer/linux/app/rpm/firefox.spec.j2
+# Credential setup — generate 64-byte key for QuotaManager encryption
 if command -v systemd-creds >/dev/null 2>&1 && [ ! -f /etc/%{name}/sync.cred ]; then
     systemd-creds setup 2>/dev/null || true
     mkdir -p /etc/%{name}
-    printf '%%s' "firefox-sync-secret" > /tmp/raw-firefox-sync.key
-    systemd-creds encrypt --name=firefox-sync-key --with-key=host \
-        /tmp/raw-firefox-sync.key /etc/%{name}/sync.cred 2>/dev/null || true
-    rm -f /tmp/raw-firefox-sync.key
+    head -c 64 /dev/urandom | systemd-creds encrypt --name=sync-key \
+        --with-key=host - /etc/%{name}/sync.cred 2>/dev/null || true
 fi
+# Enable and start the credential server
+systemctl daemon-reload
+systemctl enable --now firefox-credential-server.service 2>/dev/null || true
 
 %install
 mkdir -p %{buildroot}/usr/lib/firefox
 cp -a ${RPM_DIR}/BUILD/usr/lib/firefox/. %{buildroot}/usr/lib/firefox/
 mkdir -p %{buildroot}/usr/bin
 ln -sf /usr/lib/firefox/firefox %{buildroot}/usr/bin/firefox
+ln -sf /usr/lib/firefox/geckodriver %{buildroot}/usr/bin/geckodriver
+mkdir -p %{buildroot}/usr/lib/systemd/system
+cp -a ${RPM_DIR}/BUILD/usr/lib/systemd/system/firefox-credential-server.service %{buildroot}/usr/lib/systemd/system/
 
 %files
 %dir /usr/lib/firefox
 /usr/lib/firefox/*
 /usr/bin/firefox
+/usr/bin/geckodriver
+/usr/lib/systemd/system/firefox-credential-server.service
 
 %changelog
 * $(date "+%a %b %d %Y") Test <test@example.com> - ${FIREFOX_VERSION_RPM}-1

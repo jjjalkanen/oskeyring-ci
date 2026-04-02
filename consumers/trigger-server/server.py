@@ -42,12 +42,66 @@ class TriggerHandler(http.server.BaseHTTPRequestHandler):
                 # Step 2: Run tests
                 test = subprocess.run(
                     ['python3', f'{CONSUMER_DIR}/test-runner.py'],
-                    capture_output=True, text=True, timeout=60
+                    capture_output=True, text=True, timeout=120
                 )
                 results = json.loads(test.stdout.strip())
                 print(f"[{consumer_name}] Test result: {results.get('status')}")
 
-                # Step 3: Report to builder
+                # Step 2.5: IDB encryption verification (always both modes)
+                idb_runner = f'{CONSUMER_DIR}/idb-verify.py'
+                if os.path.exists(idb_runner):
+                    for mode, flag in [('idb_plaintext', []), ('idb_encrypted', ['--encryption'])]:
+                        label = 'encrypted' if flag else 'plaintext'
+                        print(f"[{consumer_name}] IDB verify ({label})...")
+                        try:
+                            cmd = ['python3', idb_runner] + flag
+                            binary = os.environ.get('WPT_FIREFOX_BINARY', '')
+                            if binary:
+                                cmd.extend(['--binary', binary])
+                            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                            try:
+                                results[mode] = json.loads(proc.stdout.strip())
+                            except json.JSONDecodeError:
+                                results[mode] = {'idb_status': 'error', 'details': proc.stderr[-2000:]}
+                        except subprocess.TimeoutExpired:
+                            results[mode] = {'idb_status': 'timeout'}
+                        except Exception as e:
+                            results[mode] = {'idb_status': 'error', 'details': str(e)}
+                        print(f"[{consumer_name}] IDB ({label}): {results[mode].get('idb_status')}")
+
+                # Step 3: WPT tests (if available)
+                wpt_runner = f'{CONSUMER_DIR}/wpt-runner.py'
+                if os.path.exists(wpt_runner):
+                    print(f"[{consumer_name}] Running WPT tests...")
+                    try:
+                        wpt_cmd = ['python3', wpt_runner]
+                        if os.environ.get('WPT_ENCRYPTION'):
+                            wpt_cmd.append('--encryption')
+                        wpt_binary = os.environ.get('WPT_FIREFOX_BINARY', '')
+                        if wpt_binary:
+                            wpt_cmd.extend(['--binary', wpt_binary])
+                        wpt_geckodriver = os.environ.get('WPT_GECKODRIVER_BINARY', '')
+                        if wpt_geckodriver:
+                            wpt_cmd.extend(['--webdriver-binary', wpt_geckodriver])
+                        wpt = subprocess.run(
+                            wpt_cmd,
+                            capture_output=True, text=True, timeout=600
+                        )
+                        try:
+                            wpt_results = json.loads(wpt.stdout.strip())
+                            results['wpt'] = wpt_results
+                        except json.JSONDecodeError:
+                            results['wpt'] = {
+                                'wpt_status': 'error',
+                                'wpt_log': wpt.stderr[-2000:] if wpt.stderr else ''
+                            }
+                        print(f"[{consumer_name}] WPT result: {results['wpt'].get('wpt_status')}")
+                    except subprocess.TimeoutExpired:
+                        results['wpt'] = {'wpt_status': 'timeout', 'wpt_log': 'WPT runner timed out after 600s'}
+                    except Exception as e:
+                        results['wpt'] = {'wpt_status': 'error', 'wpt_log': str(e)}
+
+                # Step 4: Report to builder
                 self._report(results)
                 self._respond(200, results)
 

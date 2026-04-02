@@ -42,11 +42,24 @@ base: core22
 apps:
   firefox:
     command: bin/firefox
+  geckodriver:
+    command: bin/geckodriver
 EOF
 
 # Copy Firefox files
 echo "Copying Firefox files into snap structure..."
 cp -a "${EXTRACT_DIR}/firefox/." "${SNAP_DIR}/lib/firefox/"
+
+# Include geckodriver
+cp /home/builder/output/geckodriver "${SNAP_DIR}/lib/firefox/geckodriver"
+chmod +x "${SNAP_DIR}/lib/firefox/geckodriver"
+
+# Create geckodriver wrapper script
+cat > "${SNAP_DIR}/bin/geckodriver" << 'GECKOWRAPPER'
+#!/bin/bash
+exec "$SNAP/lib/firefox/geckodriver" "$@"
+GECKOWRAPPER
+chmod +x "${SNAP_DIR}/bin/geckodriver"
 
 # Create wrapper script
 cat > "${SNAP_DIR}/bin/firefox" << 'WRAPPER'

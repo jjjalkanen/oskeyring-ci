@@ -1,4 +1,5 @@
 mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/../obj-fx-dbg
+mk_add_options AUTOCLOBBER=1
 ac_add_options --enable-application=browser
 ac_add_options --enable-debug
 ac_add_options --enable-debug-symbols

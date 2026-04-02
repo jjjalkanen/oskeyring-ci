@@ -35,4 +35,5 @@ COPY --chown=builder:builder firefox/browser/installer/linux/app/ firefox/browse
 
 WORKDIR /home/builder
 
+EXPOSE 8888
 ENTRYPOINT ["/home/builder/scripts/entrypoint.sh"]

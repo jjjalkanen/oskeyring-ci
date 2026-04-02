@@ -4,17 +4,31 @@ set -e
 VM_NAME="snap-consumer-vm"
 VM_PID_FILE="/tmp/${VM_NAME}.pid"
 
+VALID_CONSUMERS=(consumer-arch consumer-debian consumer-redhat consumer-ubuntu)
+SELECTED_CONSUMERS=()
+
 usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --build-only   Run only the Firefox build (./mach build), then exit."
-    echo "                 Skips canary app, packaging, VM, and containers."
-    echo "  --no-build     Skip ./mach build; use existing build artifacts for packaging."
-    echo "                 Canary app is still built."
-    echo "  --force-build  Proceed even if active mozconfig differs from both"
-    echo "                 canonical configs, or if stored objdir configs mismatch."
-    echo "  -h, --help     Show this help message."
+    echo "  --build-only          Run only the Firefox build (./mach build), then exit."
+    echo "                        Skips canary app, packaging, VM, and containers."
+    echo "  --no-build            Skip ./mach build; use existing build artifacts for packaging."
+    echo "                        Canary app is still built."
+    echo "  --force-build         Proceed even if active mozconfig differs from both"
+    echo "                        canonical configs, or if stored objdir configs mismatch."
+    echo "  --consumer <name>     Only run the named consumer (repeatable)."
+    echo "                        Valid names: ${VALID_CONSUMERS[*]}"
+    echo "                        If omitted, all consumers are run."
+    echo "  -h, --help            Show this help message."
+}
+
+consumer_enabled() {
+    local name="$1"
+    for c in "${SELECTED_CONSUMERS[@]}"; do
+        [[ "$c" == "$name" ]] && return 0
+    done
+    return 1
 }
 
 # Compare mozconfigs ignoring blank lines, trailing whitespace, and line order
@@ -28,20 +42,52 @@ diff_mozconfigs() {
 BUILD_ONLY=false
 NO_BUILD=false
 FORCE_BUILD=false
-for arg in "$@"; do
-    case "$arg" in
+while [ $# -gt 0 ]; do
+    case "$1" in
         --build-only)  BUILD_ONLY=true ;;
         --no-build)    NO_BUILD=true ;;
         --force-build) FORCE_BUILD=true ;;
+        --consumer)
+            shift
+            if [ $# -eq 0 ]; then
+                echo "ERROR: --consumer requires a name"; echo ""; usage; exit 1
+            fi
+            valid=false
+            for v in "${VALID_CONSUMERS[@]}"; do
+                [[ "$v" == "$1" ]] && valid=true
+            done
+            if [ "$valid" = false ]; then
+                echo "ERROR: Invalid consumer '$1'"
+                echo "Valid consumers: ${VALID_CONSUMERS[*]}"
+                exit 1
+            fi
+            SELECTED_CONSUMERS+=("$1")
+            ;;
         -h|--help)     usage; exit 0 ;;
-        *)             echo "Unknown option: $arg"; echo ""; usage; exit 1 ;;
+        *)             echo "Unknown option: $1"; echo ""; usage; exit 1 ;;
     esac
+    shift
 done
+
+# Default to all consumers if none specified
+if [ ${#SELECTED_CONSUMERS[@]} -eq 0 ]; then
+    SELECTED_CONSUMERS=("${VALID_CONSUMERS[@]}")
+fi
 
 echo "=========================================="
 echo "Podman Container Orchestration"
 echo "=========================================="
 echo ""
+
+# Set kernel.core_pattern so core dumps land in a known location.
+# This is a host-level setting (containers share the host kernel).
+CORE_DIR=/tmp/cores
+mkdir -p "$CORE_DIR"
+if sudo sysctl -w kernel.core_pattern="$CORE_DIR/core.%e.%p.%t" 2>/dev/null; then
+    echo "Core dump pattern set to $CORE_DIR/core.%e.%p.%t"
+else
+    echo "WARNING: Could not set kernel.core_pattern (no sudo?). Core dumps may not be captured."
+fi
 
 # Check prerequisites
 check_prerequisites() {
@@ -50,7 +96,7 @@ check_prerequisites() {
     echo "Checking prerequisites..."
 
     # Check for /dev/fuse (required for flatpak)
-    if [ ! -e /dev/fuse ]; then
+    if consumer_enabled consumer-arch && [ ! -e /dev/fuse ]; then
         echo "ERROR: /dev/fuse not found. Install fuse: sudo apt install fuse"
         failed=1
     fi
@@ -67,8 +113,8 @@ check_prerequisites() {
         failed=1
     fi
 
-    # Check for qemu-system-x86_64
-    if ! command -v qemu-system-x86_64 &>/dev/null; then
+    # Check for qemu-system-x86_64 (required for snap VM)
+    if consumer_enabled consumer-ubuntu && ! command -v qemu-system-x86_64 &>/dev/null; then
         echo "ERROR: qemu-system-x86_64 not found. Install: sudo apt install qemu-system-x86"
         failed=1
     fi
@@ -172,7 +218,9 @@ cleanup() {
         podman stop -a -t 5 2>/dev/null || true
         podman rm -a -f 2>/dev/null || true
     }
-    stop_vm
+    if consumer_enabled consumer-ubuntu; then
+        stop_vm
+    fi
 }
 
 trap cleanup EXIT INT TERM
@@ -183,21 +231,28 @@ if [ "$BUILD_ONLY" = true ]; then
     echo ""
 else
     check_prerequisites
-    check_vm_prerequisites
+    if consumer_enabled consumer-ubuntu; then
+        check_vm_prerequisites
+    fi
 
     # Step 1: Create network
     echo "Step 1: Creating network..."
     ./scripts/create-network.sh
     echo ""
 
-    # Step 2: Start VM
-    echo "Step 2: Starting snap consumer VM..."
-    reset_vm_state
-    start_vm
-    echo ""
+    # Step 2: Start VM (only if ubuntu consumer is enabled)
+    if consumer_enabled consumer-ubuntu; then
+        echo "Step 2: Starting snap consumer VM..."
+        reset_vm_state
+        start_vm
+        echo ""
+    else
+        echo "Step 2: Skipping VM (consumer-ubuntu not selected)"
+        echo ""
+    fi
 fi
 
-if [ "$BUILD_ONLY" != true ]; then
+if [ "$BUILD_ONLY" != true ] && consumer_enabled consumer-ubuntu; then
 # Step 2.5: Update scripts in VM
 echo "Step 2.5: Updating scripts in VM..."
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -305,7 +360,7 @@ if ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
     echo "Scripts updated successfully"
 fi
 echo ""
-fi  # end BUILD_ONLY != true
+fi  # end BUILD_ONLY != true && consumer-ubuntu enabled
 
 # Step 3: Build on host
 echo "Step 3: Building on host..."
@@ -323,90 +378,126 @@ if [ -d "$HOME/.mozbuild/clang/bin" ]; then
     export PATH="$HOME/.mozbuild/clang/bin:$PATH"
 fi
 
-# Step 3a: Mozconfig resolution check (host-native)
-echo "Step 3a: Checking mozconfig (host-native)..."
+# Step 3a: Mozconfig validation
+echo "Step 3a: Validating mozconfig files..."
 cd "$PROJECT_DIR/firefox"
+VALIDATION_FAILED=false
 
-if [ -n "${MOZCONFIG:-}" ]; then
-    EFFECTIVE_MOZCONFIG="$MOZCONFIG"
-elif [ -f "$PROJECT_DIR/firefox/mozconfig" ]; then
-    EFFECTIVE_MOZCONFIG="$PROJECT_DIR/firefox/mozconfig"
-elif [ -f "$PROJECT_DIR/firefox/.mozconfig" ]; then
-    EFFECTIVE_MOZCONFIG="$PROJECT_DIR/firefox/.mozconfig"
-else
-    EFFECTIVE_MOZCONFIG=""
-fi
-
-if [ -z "$EFFECTIVE_MOZCONFIG" ]; then
-    echo "No mozconfig found. Defaulting to builder/scripts/firefox-mozconfig."
-    export MOZCONFIG="$CANONICAL_MOZCONFIG"
-    MATCHED_CONFIG="canonical"
-elif diff_mozconfigs -q "$EFFECTIVE_MOZCONFIG" "$CANONICAL_MOZCONFIG" >/dev/null 2>&1; then
-    MATCHED_CONFIG="canonical"
-elif diff_mozconfigs -q "$EFFECTIVE_MOZCONFIG" "$RHEL9_MOZCONFIG" >/dev/null 2>&1; then
-    MATCHED_CONFIG="rhel9"
-else
-    echo "ERROR: Active mozconfig matches neither firefox-mozconfig nor firefox-mozconfig-rhel9:"
-    echo "  --- vs firefox-mozconfig ---"
-    diff_mozconfigs -u "$EFFECTIVE_MOZCONFIG" "$CANONICAL_MOZCONFIG" || true
-    echo "  --- vs firefox-mozconfig-rhel9 ---"
-    diff_mozconfigs -u "$EFFECTIVE_MOZCONFIG" "$RHEL9_MOZCONFIG" || true
-    if [ "$FORCE_BUILD" = true ]; then
-        echo "  --force-build: overriding with builder/scripts/firefox-mozconfig"
-        export MOZCONFIG="$CANONICAL_MOZCONFIG"
-        MATCHED_CONFIG="canonical"
+rotate_mozconfig() {
+    local dir="$PROJECT_DIR/firefox"
+    local latest
+    latest=$(ls -t "$dir"/mozconfig.[1-8] 2>/dev/null | head -1)
+    if [ -n "$latest" ]; then
+        local n="${latest##*.}"
+        local next=$(( (n % 8) + 1 ))
     else
-        echo "Update your mozconfig to match one of them, or pass --force-build to override."
-        exit 1
+        local next=1
     fi
-fi
+    mv "$dir/mozconfig" "$dir/mozconfig.$next"
+    echo "  Backed up firefox/mozconfig → firefox/mozconfig.$next"
+}
 
-# Cross-check the other objdir's stored .mozconfig
-if [ "$MATCHED_CONFIG" = "canonical" ]; then
-    OTHER_OBJDIR="$PROJECT_DIR/obj-fx-rhel9"
-    OTHER_CANONICAL="$RHEL9_MOZCONFIG"
-    OTHER_LABEL="firefox-mozconfig-rhel9"
-else
-    OTHER_OBJDIR="$PROJECT_DIR/obj-fx-dbg"
-    OTHER_CANONICAL="$CANONICAL_MOZCONFIG"
-    OTHER_LABEL="firefox-mozconfig"
-fi
-
-echo "Active mozconfig matched: $MATCHED_CONFIG"
-
-if [ -f "$OTHER_OBJDIR/.mozconfig" ]; then
-    if ! diff_mozconfigs -q "$OTHER_OBJDIR/.mozconfig" "$OTHER_CANONICAL" >/dev/null 2>&1; then
-        echo "ERROR: Stored config in $OTHER_OBJDIR/.mozconfig differs from $OTHER_LABEL."
-        echo "A rebuild would clobber. Pass --force-build to override."
-        diff_mozconfigs -u "$OTHER_OBJDIR/.mozconfig" "$OTHER_CANONICAL" || true
-        if [ "$FORCE_BUILD" != true ]; then
-            exit 1
+# Check 1: firefox/mozconfig must match builder/scripts/firefox-mozconfig
+TREE_MOZCONFIG="$PROJECT_DIR/firefox/mozconfig"
+if [ -f "$TREE_MOZCONFIG" ]; then
+    if ! diff_mozconfigs -q "$TREE_MOZCONFIG" "$CANONICAL_MOZCONFIG" >/dev/null 2>&1; then
+        echo "ERROR: firefox/mozconfig does not match builder/scripts/firefox-mozconfig:"
+        diff_mozconfigs -u "$TREE_MOZCONFIG" "$CANONICAL_MOZCONFIG" || true
+        if [ "$FORCE_BUILD" = true ]; then
+            rotate_mozconfig
+            echo "  --force-build: replacing firefox/mozconfig with canonical config"
+            cp "$CANONICAL_MOZCONFIG" "$TREE_MOZCONFIG"
+        else
+            echo "  Pass --force-build to overwrite firefox/mozconfig with the canonical config."
+            VALIDATION_FAILED=true
         fi
-        echo "  --force-build: proceeding despite stored config mismatch"
+    else
+        echo "  firefox/mozconfig matches canonical config (obj-fx-dbg) ✓"
     fi
+else
+    echo "  firefox/mozconfig not found — creating from canonical config"
+    cp "$CANONICAL_MOZCONFIG" "$TREE_MOZCONFIG"
+fi
+
+# Check 2: obj-fx-rhel9/.mozconfig vs builder/scripts/firefox-mozconfig-rhel9
+RHEL9_OBJDIR="$PROJECT_DIR/obj-fx-rhel9"
+if [ -f "$RHEL9_OBJDIR/.mozconfig" ]; then
+    if ! diff_mozconfigs -q "$RHEL9_OBJDIR/.mozconfig" "$RHEL9_MOZCONFIG" >/dev/null 2>&1; then
+        echo "ERROR: obj-fx-rhel9/.mozconfig differs from builder/scripts/firefox-mozconfig-rhel9:"
+        diff_mozconfigs -u "$RHEL9_OBJDIR/.mozconfig" "$RHEL9_MOZCONFIG" || true
+        if [ "$FORCE_BUILD" != true ]; then
+            echo "  A rebuild would clobber. Pass --force-build to override."
+            VALIDATION_FAILED=true
+        else
+            echo "  --force-build: proceeding despite stored config mismatch"
+        fi
+    else
+        echo "  obj-fx-rhel9/.mozconfig matches rhel9 config ✓"
+    fi
+fi
+
+# Check 3: obj-fx-dbg/.mozconfig vs builder/scripts/firefox-mozconfig (only needed for native consumers)
+DBG_OBJDIR="$PROJECT_DIR/obj-fx-dbg"
+if (consumer_enabled consumer-arch || consumer_enabled consumer-debian || consumer_enabled consumer-ubuntu) && [ -f "$DBG_OBJDIR/.mozconfig" ]; then
+    if ! diff_mozconfigs -q "$DBG_OBJDIR/.mozconfig" "$CANONICAL_MOZCONFIG" >/dev/null 2>&1; then
+        echo "ERROR: obj-fx-dbg/.mozconfig differs from builder/scripts/firefox-mozconfig:"
+        diff_mozconfigs -u "$DBG_OBJDIR/.mozconfig" "$CANONICAL_MOZCONFIG" || true
+        if [ "$FORCE_BUILD" != true ]; then
+            echo "  A rebuild would clobber. Pass --force-build to override."
+            VALIDATION_FAILED=true
+        else
+            echo "  --force-build: proceeding despite stored config mismatch"
+        fi
+    else
+        echo "  obj-fx-dbg/.mozconfig matches canonical config ✓"
+    fi
+fi
+
+if [ "$VALIDATION_FAILED" = true ]; then
+    echo ""
+    echo "Mozconfig validation failed. Fix the issues above or pass --force-build."
+    exit 1
 fi
 echo ""
+
+# Determine which Firefox flavors are needed based on selected consumers
+NEED_NATIVE_BUILD=false
+NEED_RHEL9_BUILD=false
+if consumer_enabled consumer-arch || consumer_enabled consumer-debian || consumer_enabled consumer-ubuntu; then
+    NEED_NATIVE_BUILD=true
+fi
+if consumer_enabled consumer-redhat; then
+    NEED_RHEL9_BUILD=true
+fi
 
 # Step 3b: Firefox builds (unless --no-build)
 if [ "$NO_BUILD" != true ]; then
     # Step 3b-1: Host-native Firefox build (for DEB, Flatpak, Snap)
-    echo "Step 3b-1: Building Firefox (host-native)..."
-    export MOZCONFIG="$CANONICAL_MOZCONFIG"
-    env -u CLAUDECODE ./mach build
+    if [ "$NEED_NATIVE_BUILD" = true ]; then
+        echo "Step 3b-1: Building Firefox (host-native)..."
+        export MOZCONFIG="$CANONICAL_MOZCONFIG"
+        env -u CLAUDECODE ./mach build
+        echo ""
+    else
+        echo "Step 3b-1: Skipping host-native build (no consumers require it)"
+    fi
 
     # Step 3b-2: RHEL9-targeted Firefox build (for RPM)
-    echo ""
-    echo "Step 3b-2: Building Firefox (RHEL9-targeted)..."
-    if [ ! -f "$PROJECT_DIR/dist/onnxruntime-rhel9/libonnxruntime.so" ]; then
-        echo "ERROR: RHEL9 onnxruntime not found at dist/onnxruntime-rhel9/libonnxruntime.so"
-        echo "Run ./scripts/build-onnxruntime-rhel9.sh first."
-        exit 1
+    if [ "$NEED_RHEL9_BUILD" = true ]; then
+        echo "Step 3b-2: Building Firefox (RHEL9-targeted)..."
+        if [ ! -f "$PROJECT_DIR/dist/onnxruntime-rhel9/libonnxruntime.so" ]; then
+            echo "ERROR: RHEL9 onnxruntime not found at dist/onnxruntime-rhel9/libonnxruntime.so"
+            echo "Run ./scripts/build-onnxruntime-rhel9.sh first."
+            exit 1
+        fi
+        export MOZCONFIG="$RHEL9_MOZCONFIG"
+        env -u CLAUDECODE ./mach build
+    else
+        echo "Step 3b-2: Skipping RHEL9 build (no consumers require it)"
     fi
-    export MOZCONFIG="$RHEL9_MOZCONFIG"
-    env -u CLAUDECODE ./mach build
 
     if [ "$BUILD_ONLY" = true ]; then
-        echo "Firefox builds complete (host-native + RHEL9)."
+        echo "Firefox builds complete."
         exit 0
     fi
 else
@@ -421,30 +512,48 @@ cd "$PROJECT_DIR/app"
 cargo build --release
 cp target/release/access-keys "$PROJECT_DIR/dist/access-keys"
 
+echo "Building firefox-credential-server..."
+cd "$PROJECT_DIR/credential-server"
+cargo build --release
+cp target/release/firefox-credential-server "$PROJECT_DIR/dist/firefox-credential-server"
+
 echo ""
 
-# Step 3d: Package Firefox (both host-native and RHEL9)
+# Step 3d: Package Firefox (only flavors needed by selected consumers)
 echo "Step 3d: Packaging Firefox..."
 cd "$PROJECT_DIR/firefox"
 
-# Package host-native build (for DEB, Flatpak, Snap)
-echo "  Packaging host-native build..."
-export MOZCONFIG="$CANONICAL_MOZCONFIG"
-env -u CLAUDECODE ./mach package
-cp "$PROJECT_DIR/obj-fx-dbg/dist"/firefox-*.tar.xz "$PROJECT_DIR/dist/firefox.tar.xz"
+if [ "$NEED_NATIVE_BUILD" = true ]; then
+    # Package host-native build (for DEB, Flatpak, Snap)
+    echo "  Packaging host-native build..."
+    export MOZCONFIG="$CANONICAL_MOZCONFIG"
+    env -u CLAUDECODE ./mach package
+    cp "$(ls -t "$PROJECT_DIR/obj-fx-dbg/dist"/firefox-*.tar.xz | head -1)" "$PROJECT_DIR/dist/firefox.tar.xz"
+    cp "$PROJECT_DIR/obj-fx-dbg/x86_64-unknown-linux-gnu/debug/geckodriver" "$PROJECT_DIR/dist/geckodriver"
+else
+    echo "  Skipping host-native packaging (not needed)"
+fi
 
-# Package RHEL9 build (for RPM)
-echo "  Packaging RHEL9 build..."
-export MOZCONFIG="$RHEL9_MOZCONFIG"
-env -u CLAUDECODE ./mach package
-cp "$PROJECT_DIR/obj-fx-rhel9/dist"/firefox-*.tar.xz "$PROJECT_DIR/dist/firefox-rhel9.tar.xz"
+if [ "$NEED_RHEL9_BUILD" = true ]; then
+    # Package RHEL9 build (for RPM)
+    echo "  Packaging RHEL9 build..."
+    export MOZCONFIG="$RHEL9_MOZCONFIG"
+    env -u CLAUDECODE ./mach package
+    cp "$(ls -t "$PROJECT_DIR/obj-fx-rhel9/dist"/firefox-*.tar.xz | head -1)" "$PROJECT_DIR/dist/firefox-rhel9.tar.xz"
+    cp "$PROJECT_DIR/obj-fx-rhel9/x86_64-unknown-linux-gnu/debug/geckodriver" "$PROJECT_DIR/dist/geckodriver-rhel9"
+else
+    echo "  Skipping RHEL9 packaging (not needed)"
+fi
 
 cd "$PROJECT_DIR"
 
 echo ""
 echo "Step 3e: Validating artifacts..."
 MISSING=0
-for artifact in access-keys firefox.tar.xz firefox-rhel9.tar.xz; do
+REQUIRED_ARTIFACTS=(access-keys firefox-credential-server)
+[ "$NEED_NATIVE_BUILD" = true ] && REQUIRED_ARTIFACTS+=(firefox.tar.xz geckodriver)
+[ "$NEED_RHEL9_BUILD" = true ]  && REQUIRED_ARTIFACTS+=(firefox-rhel9.tar.xz geckodriver-rhel9)
+for artifact in "${REQUIRED_ARTIFACTS[@]}"; do
     if [ ! -f "$PROJECT_DIR/dist/$artifact" ]; then
         echo "  MISSING: dist/$artifact"
         MISSING=1
@@ -463,19 +572,45 @@ echo ""
 echo "Step 4: Building container images..."
 echo ""
 
-podman-compose --in-pod=0 build
+# Build filtered service list
+COMPOSE_SERVICES=(builder)
+consumer_enabled consumer-arch   && COMPOSE_SERVICES+=(flatpak-registry consumer-arch) || true
+consumer_enabled consumer-debian && COMPOSE_SERVICES+=(deb-registry consumer-debian) || true
+consumer_enabled consumer-redhat && COMPOSE_SERVICES+=(rpm-registry consumer-redhat) || true
+consumer_enabled consumer-ubuntu && COMPOSE_SERVICES+=(snap-registry) || true
+
+echo "Services: ${COMPOSE_SERVICES[*]}"
+export ENABLED_CONSUMERS="$(IFS=,; echo "${SELECTED_CONSUMERS[*]}")"
+
+podman-compose --in-pod=0 build "${COMPOSE_SERVICES[@]}"
 
 # Step 5: Start services
 echo ""
-echo "Step 5: Starting all services..."
+echo "Step 5: Starting services: ${COMPOSE_SERVICES[*]}"
 echo "Note: Builder will run to completion, then containers will be stopped"
 echo ""
 
-podman-compose --in-pod=0 up -d --force-recreate
+podman-compose --in-pod=0 up -d --force-recreate "${COMPOSE_SERVICES[@]}"
 
-# Give services a moment to start up
-echo "Waiting for services to initialize..."
-sleep 5
+# Verify all services actually started (fast-fail — don't wait 2h for a dead run)
+echo "Verifying services started..."
+sleep 3
+FAILED_SERVICES=()
+for svc in "${COMPOSE_SERVICES[@]}"; do
+    if ! podman ps --format '{{.Names}}' | grep -q "^${svc}$"; then
+        FAILED_SERVICES+=("$svc")
+        echo "  ERROR: $svc did not start"
+        echo "  --- $svc startup logs ---"
+        podman logs "$svc" 2>&1 | tail -20 || echo "  (no logs available)"
+        echo "  --- end $svc logs ---"
+    else
+        echo "  OK: $svc is running"
+    fi
+done
+if [ ${#FAILED_SERVICES[@]} -ne 0 ]; then
+    echo "ERROR: ${#FAILED_SERVICES[@]} service(s) failed to start: ${FAILED_SERVICES[*]}"
+    exit 1
+fi
 
 # Wait for builder to complete
 echo "Waiting for builder to complete (timeout: ${TIMEOUT_MINUTES} minutes)..."
@@ -484,7 +619,21 @@ while podman ps --format '{{.Names}}' | grep -q '^builder$'; do
     ELAPSED=$(($(date +%s) - START_TIME))
     if [ $ELAPSED -ge $((TIMEOUT_MINUTES * 60)) ]; then
         echo "ERROR: Timeout after ${TIMEOUT_MINUTES} minutes"
+        echo "--- builder logs (last 50 lines) ---"
+        podman logs builder 2>&1 | tail -50
         exit 1
+    fi
+    # Print a heartbeat every 30s so we know the run is alive
+    if (( ELAPSED % 30 == 0 && ELAPSED > 0 )); then
+        echo "  Still running... (${ELAPSED}s elapsed)"
+        # Also check if any non-builder service died unexpectedly
+        for svc in "${COMPOSE_SERVICES[@]}"; do
+            [[ "$svc" == "builder" ]] && continue
+            if ! podman ps --format '{{.Names}}' | grep -q "^${svc}$"; then
+                echo "  WARNING: $svc stopped unexpectedly"
+                podman logs "$svc" 2>&1 | tail -10
+            fi
+        done
     fi
     sleep 2
 done
@@ -494,15 +643,45 @@ echo ""
 echo "=========================================="
 echo "Builder Results"
 echo "=========================================="
-podman logs builder 2>&1 | grep -A 50 "TEST RESULTS SUMMARY" || podman logs builder | tail -30
+podman logs builder 2>&1 | grep -A 100 "TEST RESULTS SUMMARY" || podman logs builder 2>&1 | tail -50
 
 # Get builder exit code
-BUILDER_EXIT=$(podman inspect builder --format '{{.State.ExitCode}}')
+BUILDER_EXIT=$(podman inspect builder --format '{{.State.ExitCode}}' 2>/dev/null || echo "1")
+
+# Extract WPT reports from builder container
+mkdir -p "$PROJECT_DIR/wpt-reports"
+podman cp builder:/home/builder/wpt-reports/. "$PROJECT_DIR/wpt-reports/" 2>/dev/null || true
+
+# Validate WPT reports against Firefox metadata
+if ls "$PROJECT_DIR/wpt-reports/"*.json 1>/dev/null 2>&1; then
+    echo ""
+    echo "=========================================="
+    echo "WPT Metadata Validation"
+    echo "=========================================="
+    FIREFOX_DIR="$PROJECT_DIR/firefox"
+    for report in "$PROJECT_DIR/wpt-reports/"*.json; do
+        consumer=$(basename "$report" .json)
+        echo "Validating $consumer report..."
+        (cd "$FIREFOX_DIR" && ./mach wpt-update "$report" 2>&1) || true
+
+        # Check if metadata changed
+        meta_diff=$(cd "$FIREFOX_DIR" && git diff --name-only testing/web-platform/meta/)
+        if [ -z "$meta_diff" ]; then
+            echo "  $consumer: metadata unchanged -- tests match expectations"
+        else
+            echo "  $consumer: metadata CHANGED -- unexpected test results:"
+            (cd "$FIREFOX_DIR" && git diff testing/web-platform/meta/)
+        fi
+
+        # Always restore metadata state
+        (cd "$FIREFOX_DIR" && git checkout testing/web-platform/meta/) 2>/dev/null || true
+    done
+fi
 
 # Stop all services
 echo ""
-echo "Stopping all services..."
-podman-compose --in-pod=0 down
+echo "Stopping services..."
+podman-compose --in-pod=0 down "${COMPOSE_SERVICES[@]}"
 
 # Return builder's exit code
 if [ "$BUILDER_EXIT" -eq 0 ]; then

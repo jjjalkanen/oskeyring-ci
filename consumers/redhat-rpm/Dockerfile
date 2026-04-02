@@ -47,7 +47,7 @@ COPY --chown=consumer:consumer trigger-server/wpt-runner.py /home/consumer/wpt-r
 COPY --chown=consumer:consumer trigger-server/idb-verify.py /home/consumer/idb-verify.py
 
 # Install WPT test suite
-RUN git clone --depth 1 https://github.com/web-platform-tests/wpt.git /opt/wpt && \
+RUN git clone --depth 1 --branch merge_pr_58944 https://github.com/web-platform-tests/wpt.git /opt/wpt && \
     cd /opt/wpt && python3 ./wpt make-hosts-file | tee -a /etc/hosts && \
     chown -R consumer:consumer /opt/wpt
 

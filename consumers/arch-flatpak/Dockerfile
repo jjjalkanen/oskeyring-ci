@@ -2,7 +2,7 @@ FROM archlinux:latest
 
 RUN pacman -Syu --noconfirm && \
     pacman -S --noconfirm flatpak python curl gnupg \
-        xdg-desktop-portal gnome-keyring dbus sudo
+        xdg-desktop-portal gnome-keyring dbus sudo git python-pip
 
 # Pre-install the Flatpak runtime so it's cached in the image layer
 RUN flatpak remote-add --if-not-exists flathub \
@@ -25,6 +25,16 @@ COPY arch-flatpak/upgrade.sh /home/consumer/upgrade.sh
 RUN chmod +x /home/consumer/upgrade.sh
 COPY --chown=consumer:consumer trigger-server/server.py /home/consumer/server.py
 COPY --chown=consumer:consumer trigger-server/test-runner.py /home/consumer/test-runner.py
+COPY --chown=consumer:consumer trigger-server/wpt-runner.py /home/consumer/wpt-runner.py
+
+# Install WPT test suite
+RUN git clone --depth 1 --branch merge_pr_58944 https://github.com/web-platform-tests/wpt.git /opt/wpt && \
+    cd /opt/wpt && python3 ./wpt make-hosts-file | tee -a /etc/hosts && \
+    chown -R consumer:consumer /opt/wpt
+
+# Flatpak wrapper script for WPT to use as --binary
+RUN printf '#!/bin/bash\nflatpak run org.mozilla.firefox "$@"\n' > /usr/local/bin/firefox-flatpak && \
+    chmod +x /usr/local/bin/firefox-flatpak
 
 # Startup wrapper: system dbus → session bus → portal → server
 COPY arch-flatpak/start.sh /home/consumer/start.sh

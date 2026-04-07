@@ -12,12 +12,14 @@ WPT_DIR = '/opt/wpt'
 
 # WPT config to avoid port conflicts with trigger-server (port 9000).
 # WPT expects exactly 2 http ports and 2 https ports.
+# h2 key moves the HTTP/2 server off its default port 9000.
 WPT_CONFIG = {
     "ports": {
         "http": [8001, 8002],
         "https": [8444, 8445],
         "ws": [9001],
-        "wss": [9002]
+        "wss": [9002],
+        "h2": [9003]
     }
 }
 

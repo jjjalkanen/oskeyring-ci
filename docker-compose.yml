@@ -64,8 +64,6 @@ services:
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup
       - ./wpt-reports/crash-dumps:/tmp/crash-dumps:Z
-    ulimits:
-      nproc: 65535
     networks:
       - default
 

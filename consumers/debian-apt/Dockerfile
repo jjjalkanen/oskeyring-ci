@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV container=docker
 
 RUN apt-get update && \
-    apt-get install -y systemd sudo python3 curl gnupg git python3-pip python3-venv dbus && \
+    apt-get install -y systemd sudo python3 curl gnupg git python3-pip python3-venv dbus libnss3-tools && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # systemd cleanup for container use

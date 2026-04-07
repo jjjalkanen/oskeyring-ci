@@ -63,6 +63,7 @@ services:
       - /run/lock
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup
+      - ./wpt-reports/crash-dumps:/tmp/crash-dumps:Z
     networks:
       - default
 

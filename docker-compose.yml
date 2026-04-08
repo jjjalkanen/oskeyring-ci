@@ -64,6 +64,7 @@ services:
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup
       - ./wpt-reports/crash-dumps:/tmp/crash-dumps:Z
+    pids_limit: 65535
     networks:
       - default
 

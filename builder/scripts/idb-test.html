@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html><body>
+<pre id="status">PENDING</pre>
+<script>
+const req = indexedDB.open("encryption-test-db", 1);
+req.onupgradeneeded = e => {
+  e.target.result.createObjectStore("test-store", { keyPath: "key" });
+};
+req.onsuccess = e => {
+  const db = e.target.result;
+  const tx = db.transaction("test-store", "readwrite");
+  tx.objectStore("test-store").put({
+    key: "marker",
+    value: new Date().toISOString(),
+    padding: "A".repeat(4096)
+  });
+  tx.oncomplete = () => {
+    document.getElementById("status").textContent = "IDB_WRITE_SUCCESS";
+  };
+  tx.onerror = () => {
+    document.getElementById("status").textContent = "IDB_WRITE_FAILED";
+  };
+};
+req.onerror = () => {
+  document.getElementById("status").textContent = "IDB_OPEN_FAILED";
+};
+</script>
+</body></html>

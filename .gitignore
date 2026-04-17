@@ -1,6 +1,7 @@
 # Rust build artifacts
 app/target/
 app/Cargo.lock
+credential-server/target/
 
 # Output directories
 build/
@@ -24,7 +25,11 @@ vm/images/
 vm/disks/
 vm/ssh/
 vm/cloud-init-user-data
+vm/deb-cloud-init-user-data
 vm/logs/
+
+# Test output
+wpt-reports/
 
 # sccache cache (contents only, keep the directory)
 cache/*

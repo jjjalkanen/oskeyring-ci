@@ -8,13 +8,64 @@ users:
     ssh_authorized_keys:
       - {{ lookup('file', playbook_dir + '/../../vm/ssh/id_ed25519.pub') }}
 
+write_files:
+  - path: /etc/systemd/system/snap-consumer.service
+    content: |
+      [Unit]
+      Description=Snap Consumer Trigger Server
+      After=network-online.target snapd.service dbus.socket
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      Environment=CONSUMER_NAME=consumer-ubuntu
+      Environment=CONSUMER_DIR=/opt/snap-consumer
+      Environment=BUILDER_URL=http://{{ vm_internal_gateway }}:9999
+      Environment=SNAP_REGISTRY_URL={{ snap_registry_url }}
+      Environment=WPT_FIREFOX_BINARY=/snap/firefox/current/lib/firefox/firefox
+      Environment=WPT_GECKODRIVER_BINARY=/snap/firefox/current/lib/firefox/geckodriver
+      Environment=LD_LIBRARY_PATH=/snap/firefox/current/lib/firefox
+      ExecStartPre=+/bin/sh -c 'cd /opt/wpt && python3 ./wpt make-hosts-file >> /etc/hosts'
+      ExecStart=/usr/bin/dbus-run-session /usr/bin/python3 /opt/snap-consumer/server.py
+      Restart=on-failure
+      RestartSec=5
+      WorkingDirectory=/opt/snap-consumer
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: /opt/snap-consumer/server.py
+    content: |
+      #!/usr/bin/env python3
+      import http.server, socketserver
+      class H(http.server.BaseHTTPRequestHandler):
+          def do_GET(self):
+              if self.path == '/health':
+                  self.send_response(200); self.end_headers(); self.wfile.write(b'OK')
+              else:
+                  self.send_response(404); self.end_headers()
+          def do_POST(self):
+              self.send_response(200); self.end_headers(); self.wfile.write(b'{}')
+          def log_message(self, *a): pass
+      with socketserver.TCPServer(('', 9000), H) as s: s.serve_forever()
+
 package_update: true
 packages:
   - snapd
   - python3
+  - python3-pip
+  - python3-venv
   - curl
+  - git
+  - dbus
+  - libnss3-tools
+  - libgtk-3-0t64
+  - libdbus-glib-1-2
+  - libxt6t64
+  - libasound2t64
+  - libx11-xcb1
 
 bootcmd:
+  - mkdir -p /opt/snap-consumer
   - echo "=== VM BOOT START ===" > /dev/ttyS0
 
 runcmd:
@@ -27,179 +78,26 @@ runcmd:
   - snap wait system seed.loaded
   - echo "[cloud-init] snap seed loaded" > /dev/ttyS0
 
-  # Create consumer directory
-  - mkdir -p /opt/snap-consumer
+  # Add builder hostname so shared scripts using http://builder:8888 resolve correctly
+  - echo "{{ vm_internal_gateway }} builder" >> /etc/hosts
 
-  # Create environment file
+  # Clone WPT test suite
+  - git clone --depth 1 --branch merge_pr_58944 https://github.com/web-platform-tests/wpt.git /opt/wpt
+  - echo "[cloud-init] WPT cloned" > /dev/ttyS0
+  - cd /opt/wpt && python3 ./wpt make-hosts-file >> /etc/hosts
+  - chown -R {{ vm_user }}:{{ vm_user }} /opt/wpt
+  - echo "[cloud-init] WPT hosts configured" > /dev/ttyS0
+
+  # Create sudoers for consumer user
   - |
-    cat > /opt/snap-consumer/consumer.env << 'EOF'
-    CONSUMER_NAME=consumer-ubuntu
-    BUILDER_URL={{ builder_url }}
-    SNAP_REGISTRY_URL={{ snap_registry_url }}
-    EOF
+    echo '{{ vm_user }} ALL=(ALL) NOPASSWD: /opt/snap-consumer/upgrade.sh, /usr/bin/systemd-run' > /etc/sudoers.d/{{ vm_user }}
 
-  # Create install script
-  - |
-    cat > /opt/snap-consumer/install.sh << 'EOF'
-    #!/bin/bash
-    set -e
-    source /opt/snap-consumer/consumer.env
-    echo "[consumer-ubuntu] Downloading snap from $SNAP_REGISTRY_URL..."
-    curl -o /tmp/access-keys.snap $SNAP_REGISTRY_URL/snaps/access-keys_0.1.0_amd64.snap
-    echo "[consumer-ubuntu] Installing snap..."
-    snap install --dangerous --devmode /tmp/access-keys.snap
-    export PATH="/snap/bin:$PATH"
-    echo "[consumer-ubuntu] Installation complete"
-    EOF
-  - chmod +x /opt/snap-consumer/install.sh
-
-  # Create test runner (snap-specific version)
-  - |
-    cat > /opt/snap-consumer/test-runner.py << 'PYTEST'
-    #!/usr/bin/env python3
-    import subprocess
-    import json
-    import os
-    import sys
-
-    def test_snap_storage():
-        """Snap-specific test: verify secret storage and isolation"""
-        errors = []
-        env = {**os.environ, 'PATH': '/snap/bin:' + os.environ.get('PATH', '')}
-
-        # First run: should create secret
-        try:
-            result = subprocess.run(['access-keys'], capture_output=True, text=True, timeout=30, env=env)
-            output = result.stdout.strip()
-            if result.returncode != 0:
-                errors.append(f"First run failed with exit code {result.returncode}: {result.stderr}")
-            elif output != "Secret created":
-                errors.append(f"First run expected 'Secret created', got: {output}")
-        except Exception as e:
-            errors.append(f"First run error: {str(e)}")
-            return False, errors
-
-        # Second run: should read secret back
-        try:
-            result = subprocess.run(['access-keys'], capture_output=True, text=True, timeout=30, env=env)
-            output = result.stdout.strip()
-            if result.returncode != 0:
-                errors.append(f"Second run failed with exit code {result.returncode}: {result.stderr}")
-            elif not output.startswith("Secret read from SNAP_DATA:"):
-                errors.append(f"Second run expected secret read message, got: {output}")
-            elif "Stored secret" not in output:
-                errors.append(f"Second run did not contain expected secret value: {output}")
-        except Exception as e:
-            errors.append(f"Second run error: {str(e)}")
-            return False, errors
-
-        return len(errors) == 0, errors
-
-    def run_test():
-        consumer = os.environ.get('CONSUMER_NAME', 'consumer-ubuntu')
-        try:
-            # Run snap-specific test
-            success, errors = test_snap_storage()
-            if success:
-                return {'consumer': consumer, 'status': 'pass', 'output': 'All good', 'error': ''}
-            else:
-                return {'consumer': consumer, 'status': 'fail', 'output': '', 'error': '; '.join(errors)}
-        except subprocess.TimeoutExpired:
-            return {'consumer': consumer, 'status': 'error', 'output': '', 'error': 'Timeout after 30s'}
-        except FileNotFoundError:
-            return {'consumer': consumer, 'status': 'error', 'output': '', 'error': 'access-keys binary not found'}
-        except Exception as e:
-            return {'consumer': consumer, 'status': 'error', 'output': '', 'error': str(e)}
-
-    if __name__ == '__main__':
-        print(json.dumps(run_test()))
-    PYTEST
-  - chmod +x /opt/snap-consumer/test-runner.py
-
-  # Create trigger server
-  - |
-    cat > /opt/snap-consumer/server.py << 'PYSERVER'
-    #!/usr/bin/env python3
-    import http.server
-    import socketserver
-    import subprocess
-    import json
-    import os
-    import threading
-
-    PORT = 9000
-
-    class TriggerHandler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            if self.path == '/health':
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(b'OK')
-            else:
-                self.send_response(404)
-                self.end_headers()
-
-        def do_POST(self):
-            if self.path == '/trigger':
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(json.dumps({'status': 'triggered'}).encode())
-                threading.Thread(target=self.run_test).start()
-            else:
-                self.send_response(404)
-                self.end_headers()
-
-        def run_test(self):
-            os.chdir('/opt/snap-consumer')
-            # Source environment
-            env = os.environ.copy()
-            with open('consumer.env') as f:
-                for line in f:
-                    if '=' in line and not line.startswith('#'):
-                        k, v = line.strip().split('=', 1)
-                        env[k] = v
-
-            # Run install
-            subprocess.run(['bash', 'install.sh'], env=env, check=True)
-
-            # Run test
-            result = subprocess.run(['python3', 'test-runner.py'],
-                                    capture_output=True, text=True, env=env)
-
-            # Report to builder
-            builder_url = env.get('BUILDER_URL', 'http://10.0.2.2:9999')
-            subprocess.run(['curl', '-X', 'POST', '-H', 'Content-Type: application/json',
-                          '-d', result.stdout, f'{builder_url}/report'])
-
-        def log_message(self, format, *args):
-            print(f"[trigger-server] {args[0]}")
-
-    with socketserver.TCPServer(('', PORT), TriggerHandler) as httpd:
-        print(f'[trigger-server] Listening on port {PORT}')
-        httpd.serve_forever()
-    PYSERVER
-  - chmod +x /opt/snap-consumer/server.py
-
-  # Create systemd service
-  - |
-    cat > /etc/systemd/system/snap-consumer.service << 'EOF'
-    [Unit]
-    Description=Snap Consumer Trigger Server
-    After=network-online.target snapd.service
-    Wants=network-online.target
-
-    [Service]
-    Type=simple
-    EnvironmentFile=/opt/snap-consumer/consumer.env
-    ExecStart=/usr/bin/python3 /opt/snap-consumer/server.py
-    Restart=on-failure
-    RestartSec=5
-    WorkingDirectory=/opt/snap-consumer
-
-    [Install]
-    WantedBy=multi-user.target
-    EOF
+  # Service file written via write_files module (above)
   - echo "[cloud-init] Systemd service created" > /dev/ttyS0
+
+  # Placeholder server.py written via write_files module (above)
+  - chown {{ vm_user }}:{{ vm_user }} /opt/snap-consumer/server.py
+
   - systemctl daemon-reload
   - systemctl enable --now snap-consumer.service
   - echo "[cloud-init] Trigger server started" > /dev/ttyS0

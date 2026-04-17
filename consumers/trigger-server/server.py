@@ -27,9 +27,14 @@ class TriggerHandler(http.server.BaseHTTPRequestHandler):
 
             try:
                 # Step 1: Upgrade package (needs root via sudo)
+                env_args = []
+                for var in ['SNAP_REGISTRY_URL']:
+                    val = os.environ.get(var)
+                    if val:
+                        env_args.extend([f'{var}={val}'])
                 upgrade = subprocess.run(
-                    ['sudo', f'{CONSUMER_DIR}/upgrade.sh'],
-                    capture_output=True, text=True, timeout=120
+                    ['sudo'] + env_args + [f'{CONSUMER_DIR}/upgrade.sh'],
+                    capture_output=True, text=True, timeout=300
                 )
                 if upgrade.returncode != 0:
                     error = f"Upgrade failed (exit {upgrade.returncode}): {upgrade.stderr}"

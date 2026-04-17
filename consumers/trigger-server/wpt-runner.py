@@ -65,12 +65,13 @@ def run_wpt(args, test_path, report_file):
         '--log-raw=/tmp/wpt-raw.log',
     ]
 
-    # Wrap in dbus-run-session if no session bus is present (avoids Firefox
-    # crashes in service worker / shared worker contexts in headless containers)
-    if not os.environ.get('DBUS_SESSION_BUS_ADDRESS'):
-        dbus_run_session = shutil.which('dbus-run-session')
-        if dbus_run_session:
-            cmd = [dbus_run_session] + cmd
+    # Always wrap Firefox in its own dbus-run-session, even if
+    # DBUS_SESSION_BUS_ADDRESS is already set. This gives Firefox a dedicated
+    # session bus (avoiding shared-bus issues when the trigger-server already
+    # runs inside dbus-run-session, as on Debian).
+    dbus_run_session = shutil.which('dbus-run-session')
+    if dbus_run_session:
+        cmd = [dbus_run_session] + cmd
     if args.encryption:
         cmd.append('--setpref=dom.quotaManager.encryption.enabled=true')
     cmd.append('--setenv=MOZ_LOG=QuotaManager:5,IndexedDB:3,timestamp')
@@ -81,6 +82,12 @@ def run_wpt(args, test_path, report_file):
     cmd.append('--setenv=XPCOM_DEBUG_BREAK=stack')
     if geckodriver:
         cmd.append(f'--webdriver-binary={geckodriver}')
+    cmd.append('--setpref=browser.privatebrowsing.autostart=true')
+    cmd.append('--setenv=MOZ_DISABLE_CONTENT_SANDBOX=1')
+    # Snap devmode Firefox needs LD_LIBRARY_PATH to find libxul.so etc.
+    ld_lib = os.environ.get('LD_LIBRARY_PATH', '')
+    if ld_lib:
+        cmd.append(f'--setenv=LD_LIBRARY_PATH={ld_lib}')
     cmd.extend(['firefox', test_path])
 
     # Clear debug log so we get fresh output from this run

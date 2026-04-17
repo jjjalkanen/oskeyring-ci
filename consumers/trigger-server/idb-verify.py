@@ -38,6 +38,7 @@ def write_user_js(profile_dir, encryption=False):
     prefs = list(BASE_PREFS)
     if encryption:
         prefs.append(('dom.quotaManager.encryption.enabled', 'true'))
+        prefs.append(('dom.quotaManager.temporaryStorage.lazyOriginInitialization', 'true'))
     with open(os.path.join(profile_dir, 'user.js'), 'w') as f:
         for key, value in prefs:
             f.write(f'user_pref("{key}", {value});\n')
@@ -95,16 +96,18 @@ def run_firefox(binary, profile_dir, encryption=False):
         env['CREDENTIALS_DIRECTORY'] = creds_tmpdir
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            env=env)
+                            env=env, start_new_session=True)
 
     time.sleep(FIREFOX_WAIT)
 
-    # Graceful shutdown
-    proc.send_signal(signal.SIGTERM)
+    # Graceful shutdown — kill the entire process group so flatpak-wrapped
+    # Firefox and all its children are terminated reliably
+    pgid = os.getpgid(proc.pid)
+    os.killpg(pgid, signal.SIGTERM)
     try:
         proc.wait(timeout=KILL_WAIT)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        os.killpg(pgid, signal.SIGKILL)
         proc.wait(timeout=5)
 
     if creds_tmpdir and os.path.exists(creds_tmpdir):

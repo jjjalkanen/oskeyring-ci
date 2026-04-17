@@ -1,9 +1,39 @@
 #!/bin/bash
-# VM control script for snap-consumer-vm
+# VM control script - supports snap and deb consumer VMs
+# Usage: VM_TYPE=snap|deb ./vm-ctl.sh <command>
 
 set -e
 
-VM_NAME="snap-consumer-vm"
+# Select VM type (default: snap for backward compatibility)
+VM_TYPE="${VM_TYPE:-snap}"
+
+case "$VM_TYPE" in
+    snap)
+        VM_NAME="snap-consumer-vm"
+        SSH_PORT=2222
+        TRIGGER_PORT=9002
+        SSH_USER=testrunner
+        PROVISION_PLAYBOOK="playbooks/vm-provision.yml"
+        BAKE_PLAYBOOK="playbooks/vm-bake.yml"
+        DESTROY_PLAYBOOK="playbooks/vm-destroy.yml"
+        SERVICE_NAME="snap-consumer"
+        ;;
+    deb)
+        VM_NAME="deb-consumer-vm"
+        SSH_PORT=2223
+        TRIGGER_PORT=9003
+        SSH_USER=consumer
+        PROVISION_PLAYBOOK="playbooks/deb-vm-provision.yml"
+        BAKE_PLAYBOOK="playbooks/deb-vm-bake.yml"
+        DESTROY_PLAYBOOK="playbooks/deb-vm-destroy.yml"
+        SERVICE_NAME="trigger-server"
+        ;;
+    *)
+        echo "ERROR: Unknown VM_TYPE '$VM_TYPE'. Use 'snap' or 'deb'."
+        exit 1
+        ;;
+esac
+
 VM_PID_FILE="/tmp/${VM_NAME}.pid"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VM_DIR="$SCRIPT_DIR/../vm"
@@ -14,7 +44,9 @@ BASE_DISK="$VM_DIR/disks/${VM_NAME}.qcow2"
 
 show_usage() {
     cat << EOF
-Usage: $0 <command>
+Usage: VM_TYPE=${VM_TYPE} $0 <command>
+
+VM_TYPE: snap (default) or deb
 
 Commands:
     start          Start the VM
@@ -37,16 +69,17 @@ Commands:
     status-full    Comprehensive status dashboard
 
 Examples:
-    $0 init             # One-time setup
-    $0 bake             # After init, enable instant resets
-    $0 reset            # Reset to clean state (instant)
-    $0 status-full      # View full status
+    $0 init                       # One-time setup (snap VM)
+    VM_TYPE=deb $0 init           # One-time setup (deb VM)
+    VM_TYPE=deb $0 bake           # After init, enable instant resets
+    VM_TYPE=deb $0 reset          # Reset to clean state (instant)
+    VM_TYPE=deb $0 status-full    # View full status
 EOF
 }
 
 vm_create_overlay() {
     if [ ! -f "$BAKED_DISK" ]; then
-        echo "ERROR: No baked image. Run: $0 bake"
+        echo "ERROR: No baked image. Run: VM_TYPE=$VM_TYPE $0 bake"
         exit 1
     fi
     echo "Creating fresh overlay..."
@@ -61,7 +94,7 @@ vm_start() {
     fi
 
     if [ ! -f "$BASE_DISK" ]; then
-        echo "ERROR: VM not provisioned. Run: $0 provision"
+        echo "ERROR: VM not provisioned. Run: VM_TYPE=$VM_TYPE $0 provision"
         exit 1
     fi
 
@@ -79,7 +112,7 @@ vm_start() {
         echo "Using base image (cloud-init will run)..."
     fi
 
-    echo "Starting VM..."
+    echo "Starting VM $VM_NAME..."
     mkdir -p "$VM_DIR/logs"
     qemu-system-x86_64 \
         -name "$VM_NAME" \
@@ -88,9 +121,9 @@ vm_start() {
         -enable-kvm \
         -drive file="$DISK_IMAGE",format=qcow2 \
         -drive file="$VM_DIR/disks/${VM_NAME}-cidata.iso",format=raw \
-        -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::9002-:9000 \
+        -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22,hostfwd=tcp::${TRIGGER_PORT}-:9000 \
         -device virtio-net-pci,netdev=net0 \
-        -serial file:"$VM_DIR/logs/console.log" \
+        -serial file:"$VM_DIR/logs/${VM_NAME}-console.log" \
         -display none \
         -daemonize \
         -pidfile "$VM_PID_FILE"
@@ -99,7 +132,7 @@ vm_start() {
     echo "Waiting for health check..."
 
     for i in {1..30}; do
-        if curl -s --connect-timeout 1 http://localhost:9002/health 2>/dev/null | grep -q OK; then
+        if curl -s --connect-timeout 1 http://localhost:${TRIGGER_PORT}/health 2>/dev/null | grep -q OK; then
             echo "VM is healthy!"
             return 0
         fi
@@ -152,7 +185,7 @@ vm_status() {
 }
 
 vm_health() {
-    if curl -s --connect-timeout 2 http://localhost:9002/health 2>/dev/null | grep -q OK; then
+    if curl -s --connect-timeout 2 http://localhost:${TRIGGER_PORT}/health 2>/dev/null | grep -q OK; then
         echo "VM health check: OK"
         return 0
     else
@@ -167,12 +200,12 @@ vm_ssh() {
         exit 1
     fi
 
-    echo "Connecting to VM via SSH (testrunner@localhost:2222)..."
-    ssh -p 2222 -i "$VM_DIR/ssh/id_ed25519" testrunner@localhost "$@"
+    echo "Connecting to VM via SSH (${SSH_USER}@localhost:${SSH_PORT})..."
+    ssh -p ${SSH_PORT} -i "$VM_DIR/ssh/id_ed25519" ${SSH_USER}@localhost "$@"
 }
 
 vm_logs() {
-    vm_ssh "sudo journalctl -u snap-consumer.service -f"
+    vm_ssh "sudo journalctl -u ${SERVICE_NAME}.service -f"
 }
 
 vm_console() {
@@ -187,9 +220,9 @@ vm_console() {
 }
 
 vm_provision() {
-    echo "Provisioning VM..."
+    echo "Provisioning VM ($VM_TYPE)..."
     cd "$ANSIBLE_DIR"
-    ansible-playbook playbooks/vm-provision.yml
+    ansible-playbook "$PROVISION_PLAYBOOK"
     cd "$SCRIPT_DIR"
     echo "VM provisioned successfully"
 }
@@ -201,7 +234,7 @@ vm_destroy() {
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         vm_stop
         cd "$ANSIBLE_DIR"
-        ansible-playbook playbooks/vm-destroy.yml
+        ansible-playbook "$DESTROY_PLAYBOOK"
         cd "$SCRIPT_DIR"
         echo "VM destroyed"
     else
@@ -210,35 +243,35 @@ vm_destroy() {
 }
 
 vm_bake() {
-    echo "Baking VM image..."
+    echo "Baking VM image ($VM_TYPE)..."
     if [ ! -f "$BASE_DISK" ]; then
-        echo "ERROR: VM not provisioned. Run: $0 provision"
+        echo "ERROR: VM not provisioned. Run: VM_TYPE=$VM_TYPE $0 provision"
         exit 1
     fi
     cd "$ANSIBLE_DIR"
-    ansible-playbook playbooks/vm-bake.yml
+    ansible-playbook "$BAKE_PLAYBOOK"
     cd "$SCRIPT_DIR"
-    echo "Baked image created! You can now use '$0 reset' for instant clean state resets."
+    echo "Baked image created! You can now use 'VM_TYPE=$VM_TYPE $0 reset' for instant clean state resets."
 }
 
 vm_reset() {
-    echo "Resetting VM to clean state..."
+    echo "Resetting VM to clean state ($VM_TYPE)..."
     vm_stop 2>/dev/null || true
     if [ ! -f "$BAKED_DISK" ]; then
-        echo "ERROR: No baked image. Run: $0 bake first"
+        echo "ERROR: No baked image. Run: VM_TYPE=$VM_TYPE $0 bake first"
         exit 1
     fi
     vm_create_overlay
-    echo "Reset complete. Run: $0 start"
+    echo "Reset complete. Run: VM_TYPE=$VM_TYPE $0 start"
 }
 
 vm_init() {
-    echo "Full VM initialization (provision + start + wait for health)..."
+    echo "Full VM initialization (provision + start + wait)..."
     vm_provision
     vm_start
     echo ""
     echo "VM initialized and running!"
-    echo "Run '$0 bake' after verifying VM works to enable instant reset."
+    echo "Run 'VM_TYPE=$VM_TYPE $0 bake' after verifying VM works to enable instant reset."
 }
 
 vm_rebuild() {
@@ -249,8 +282,9 @@ vm_rebuild() {
 }
 
 vm_console_log() {
-    if [ -f "$VM_DIR/logs/console.log" ]; then
-        tail -f "$VM_DIR/logs/console.log"
+    local log="$VM_DIR/logs/${VM_NAME}-console.log"
+    if [ -f "$log" ]; then
+        tail -f "$log"
     else
         echo "No console log found. Is VM running?"
         exit 1
@@ -258,15 +292,16 @@ vm_console_log() {
 }
 
 vm_status_full() {
-    echo "=== VM Status ==="
+    echo "=== VM Status ($VM_TYPE) ==="
     vm_status || true
     echo ""
     echo "=== Health Check ==="
     vm_health || true
     echo ""
     echo "=== Last Boot Log ==="
-    if [ -f "$VM_DIR/logs/console.log" ]; then
-        tail -5 "$VM_DIR/logs/console.log"
+    local log="$VM_DIR/logs/${VM_NAME}-console.log"
+    if [ -f "$log" ]; then
+        tail -5 "$log"
     else
         echo "No console log available"
     fi
@@ -284,7 +319,7 @@ vm_status_full() {
             echo "Overlay: Not created (will be created on next start)"
         fi
     else
-        echo "Not created (run: $0 bake)"
+        echo "Not created (run: VM_TYPE=$VM_TYPE $0 bake)"
     fi
 }
 

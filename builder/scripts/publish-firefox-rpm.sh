@@ -129,6 +129,9 @@ QA_RPATHS=0x0002 rpmbuild --define "_topdir ${RPM_DIR}" -bb "${RPM_DIR}/SPECS/fi
 # Find the built RPM
 RPM_FILE=$(find "${RPM_DIR}/RPMS" -name "firefox-*.rpm" -type f)
 
+# Remove stale Firefox RPMs before adding the new one
+rm -f output/rpm/firefox-*.rpm
+
 # Copy to output/rpm alongside access-keys RPM
 cp "${RPM_FILE}" output/rpm/
 

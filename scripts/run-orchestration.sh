@@ -3,6 +3,8 @@ set -e
 
 VM_NAME="snap-consumer-vm"
 VM_PID_FILE="/tmp/${VM_NAME}.pid"
+DEB_VM_NAME="deb-consumer-vm"
+DEB_VM_PID_FILE="/tmp/${DEB_VM_NAME}.pid"
 
 VALID_CONSUMERS=(consumer-arch consumer-debian consumer-redhat consumer-ubuntu)
 SELECTED_CONSUMERS=()
@@ -113,8 +115,8 @@ check_prerequisites() {
         failed=1
     fi
 
-    # Check for qemu-system-x86_64 (required for snap VM)
-    if consumer_enabled consumer-ubuntu && ! command -v qemu-system-x86_64 &>/dev/null; then
+    # Check for qemu-system-x86_64 (required for snap and deb VMs)
+    if (consumer_enabled consumer-ubuntu || consumer_enabled consumer-debian) && ! command -v qemu-system-x86_64 &>/dev/null; then
         echo "ERROR: qemu-system-x86_64 not found. Install: sudo apt install qemu-system-x86"
         failed=1
     fi
@@ -131,9 +133,14 @@ check_prerequisites() {
 # Check VM is provisioned
 check_vm_prerequisites() {
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-    if [ ! -f "$SCRIPT_DIR/../vm/disks/${VM_NAME}.qcow2" ]; then
-        echo "ERROR: VM not provisioned. Run:"
+    if consumer_enabled consumer-ubuntu && [ ! -f "$SCRIPT_DIR/../vm/disks/${VM_NAME}.qcow2" ]; then
+        echo "ERROR: Snap VM not provisioned. Run:"
         echo "  cd ansible && ansible-playbook playbooks/vm-provision.yml"
+        exit 1
+    fi
+    if consumer_enabled consumer-debian && [ ! -f "$SCRIPT_DIR/../vm/disks/${DEB_VM_NAME}.qcow2" ]; then
+        echo "ERROR: Deb VM not provisioned. Run:"
+        echo "  cd ansible && ansible-playbook playbooks/deb-vm-provision.yml"
         exit 1
     fi
 }
@@ -187,13 +194,13 @@ start_vm() {
         -drive file="$VM_DIR/disks/${VM_NAME}-cidata.iso",format=raw \
         -netdev user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::9002-:9000 \
         -device virtio-net-pci,netdev=net0 \
-        -serial file:"$VM_DIR/logs/console.log" \
+        -serial file:"$VM_DIR/logs/${VM_NAME}-console.log" \
         -display none \
         -daemonize \
         -pidfile "$VM_PID_FILE"
 
     echo "Waiting for VM to be ready..."
-    ./scripts/vm-health-check.sh
+    VM_TRIGGER_PORT=9002 VM_LOG_FILE="$VM_DIR/logs/${VM_NAME}-console.log" ./scripts/vm-health-check.sh
 }
 
 # Stop VM function
@@ -202,6 +209,70 @@ stop_vm() {
     if [ -f "$VM_PID_FILE" ]; then
         kill $(cat "$VM_PID_FILE") 2>/dev/null || true
         rm -f "$VM_PID_FILE"
+    fi
+}
+
+# Deb VM functions
+reset_deb_vm_state() {
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    VM_DIR="$SCRIPT_DIR/../vm"
+    BAKED_DISK="$VM_DIR/disks/${DEB_VM_NAME}-baked.qcow2"
+    OVERLAY_DISK="$VM_DIR/disks/${DEB_VM_NAME}-overlay.qcow2"
+
+    if [ -f "$BAKED_DISK" ]; then
+        echo "Resetting deb VM to clean state..."
+        rm -f "$OVERLAY_DISK"
+        qemu-img create -f qcow2 -b "$(basename "$BAKED_DISK")" -F qcow2 "$OVERLAY_DISK" >/dev/null 2>&1
+        echo "Deb VM state reset (using overlay)"
+    fi
+}
+
+start_deb_vm() {
+    echo "Starting deb-consumer-vm..."
+
+    if [ -f "$DEB_VM_PID_FILE" ] && kill -0 $(cat "$DEB_VM_PID_FILE") 2>/dev/null; then
+        echo "Deb VM already running"
+        return 0
+    fi
+
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    VM_DIR="$SCRIPT_DIR/../vm"
+    BAKED_DISK="$VM_DIR/disks/${DEB_VM_NAME}-baked.qcow2"
+    OVERLAY_DISK="$VM_DIR/disks/${DEB_VM_NAME}-overlay.qcow2"
+    BASE_DISK="$VM_DIR/disks/${DEB_VM_NAME}.qcow2"
+
+    if [ -f "$BAKED_DISK" ]; then
+        DISK_IMAGE="$OVERLAY_DISK"
+        echo "Using baked image with overlay (fast boot)..."
+    else
+        DISK_IMAGE="$BASE_DISK"
+        echo "Using base image (cloud-init will run)..."
+    fi
+
+    mkdir -p "$VM_DIR/logs"
+    qemu-system-x86_64 \
+        -name "$DEB_VM_NAME" \
+        -m 2048 \
+        -smp 2 \
+        -enable-kvm \
+        -drive file="$DISK_IMAGE",format=qcow2 \
+        -drive file="$VM_DIR/disks/${DEB_VM_NAME}-cidata.iso",format=raw \
+        -netdev user,id=net0,hostfwd=tcp::2223-:22,hostfwd=tcp::9003-:9000 \
+        -device virtio-net-pci,netdev=net0 \
+        -serial file:"$VM_DIR/logs/${DEB_VM_NAME}-console.log" \
+        -display none \
+        -daemonize \
+        -pidfile "$DEB_VM_PID_FILE"
+
+    echo "Waiting for deb VM to be ready..."
+    VM_TRIGGER_PORT=9003 VM_LOG_FILE="$VM_DIR/logs/${DEB_VM_NAME}-console.log" ./scripts/vm-health-check.sh
+}
+
+stop_deb_vm() {
+    echo "Stopping deb-consumer-vm..."
+    if [ -f "$DEB_VM_PID_FILE" ]; then
+        kill $(cat "$DEB_VM_PID_FILE") 2>/dev/null || true
+        rm -f "$DEB_VM_PID_FILE"
     fi
 }
 
@@ -221,6 +292,9 @@ cleanup() {
     if consumer_enabled consumer-ubuntu; then
         stop_vm
     fi
+    if consumer_enabled consumer-debian; then
+        stop_deb_vm
+    fi
 }
 
 trap cleanup EXIT INT TERM
@@ -231,7 +305,7 @@ if [ "$BUILD_ONLY" = true ]; then
     echo ""
 else
     check_prerequisites
-    if consumer_enabled consumer-ubuntu; then
+    if consumer_enabled consumer-ubuntu || consumer_enabled consumer-debian; then
         check_vm_prerequisites
     fi
 
@@ -240,127 +314,134 @@ else
     ./scripts/create-network.sh
     echo ""
 
-    # Step 2: Start VM (only if ubuntu consumer is enabled)
+    # Step 2: Start VMs
     if consumer_enabled consumer-ubuntu; then
         echo "Step 2: Starting snap consumer VM..."
         reset_vm_state
         start_vm
         echo ""
-    else
-        echo "Step 2: Skipping VM (consumer-ubuntu not selected)"
+    fi
+    if consumer_enabled consumer-debian; then
+        echo "Step 2b: Starting deb consumer VM..."
+        reset_deb_vm_state
+        start_deb_vm
+        echo ""
+    fi
+    if ! consumer_enabled consumer-ubuntu && ! consumer_enabled consumer-debian; then
+        echo "Step 2: Skipping VMs (neither consumer-ubuntu nor consumer-debian selected)"
         echo ""
     fi
 fi
 
 if [ "$BUILD_ONLY" != true ] && consumer_enabled consumer-ubuntu; then
-# Step 2.5: Update scripts in VM
-echo "Step 2.5: Updating scripts in VM..."
+# Step 2.5: Update scripts in snap VM
+echo "Step 2.5: Updating scripts in snap VM..."
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SSH_OPTS="-i $SCRIPT_DIR/../vm/ssh/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=2"
 
 # Wait for SSH to be ready (max 60 seconds)
 echo "Waiting for SSH to be ready on port 2222..."
 for i in {1..60}; do
-    if ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -o ConnectTimeout=2 \
-        -p 2222 \
-        testrunner@localhost "exit" 2>/dev/null; then
+    if ssh $SSH_OPTS -p 2222 testrunner@localhost "exit" 2>/dev/null; then
         echo "SSH is ready"
         break
     fi
     if [ $i -eq 60 ]; then
         echo "WARNING: SSH not ready after 60 seconds, skipping script update"
         echo ""
-        # Continue without updating (VM will use embedded script)
-        # Don't exit - this is not critical
     else
         sleep 1
     fi
 done
 
 # Copy and update scripts if SSH is ready
-if ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
-    -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null \
-    -o ConnectTimeout=2 \
-    -p 2222 \
-    testrunner@localhost "exit" 2>/dev/null; then
+if ssh $SSH_OPTS -p 2222 testrunner@localhost "exit" 2>/dev/null; then
+    scp_snap() {
+        scp -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -P 2222 "$1" testrunner@localhost:/tmp/"$(basename "$1")" \
+            2>&1 | grep -v "Warning: Permanently added" || true
+    }
+    ssh_snap() {
+        ssh $SSH_OPTS -p 2222 testrunner@localhost "$@" \
+            2>&1 | grep -v "Warning: Permanently added" || true
+    }
 
-    # Push test-runner.py
-    scp -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -P 2222 \
-        "$SCRIPT_DIR/../consumers/trigger-server/test-runner.py" \
-        testrunner@localhost:/tmp/test-runner.py 2>&1 | grep -v "Warning: Permanently added" || true
-
-    ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -p 2222 \
-        testrunner@localhost \
-        "sudo mv /tmp/test-runner.py /opt/snap-consumer/test-runner.py && sudo chmod +x /opt/snap-consumer/test-runner.py" 2>&1 | grep -v "Warning: Permanently added" || true
-
-    # Push server.py
-    scp -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -P 2222 \
-        "$SCRIPT_DIR/../consumers/trigger-server/server.py" \
-        testrunner@localhost:/tmp/server.py 2>&1 | grep -v "Warning: Permanently added" || true
-
-    ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -p 2222 \
-        testrunner@localhost \
-        "sudo mv /tmp/server.py /opt/snap-consumer/server.py && sudo chmod +x /opt/snap-consumer/server.py" 2>&1 | grep -v "Warning: Permanently added" || true
+    # Push shared trigger-server scripts
+    for script in server.py test-runner.py wpt-runner.py idb-verify.py; do
+        scp_snap "$SCRIPT_DIR/../consumers/trigger-server/$script"
+        ssh_snap "sudo mv /tmp/$script /opt/snap-consumer/$script && sudo chmod +x /opt/snap-consumer/$script"
+    done
 
     # Push upgrade.sh
-    scp -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -P 2222 \
-        "$SCRIPT_DIR/../consumers/ubuntu-snap/upgrade.sh" \
-        testrunner@localhost:/tmp/upgrade.sh 2>&1 | grep -v "Warning: Permanently added" || true
+    scp_snap "$SCRIPT_DIR/../consumers/ubuntu-snap/upgrade.sh"
+    ssh_snap "sudo mv /tmp/upgrade.sh /opt/snap-consumer/upgrade.sh && sudo chmod +x /opt/snap-consumer/upgrade.sh"
 
-    ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -p 2222 \
-        testrunner@localhost \
-        "sudo mv /tmp/upgrade.sh /opt/snap-consumer/upgrade.sh && sudo chmod +x /opt/snap-consumer/upgrade.sh" 2>&1 | grep -v "Warning: Permanently added" || true
-
-    # Configure sudoers for testrunner
-    ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -p 2222 \
-        testrunner@localhost \
-        "echo 'testrunner ALL=(ALL) NOPASSWD: /opt/snap-consumer/upgrade.sh' | sudo tee /etc/sudoers.d/testrunner" 2>&1 | grep -v "Warning: Permanently added" || true
-
-    # Set CONSUMER_DIR env in snap-consumer.service
-    ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -p 2222 \
-        testrunner@localhost \
-        "sudo mkdir -p /etc/systemd/system/snap-consumer.service.d && printf '[Service]\nEnvironment=CONSUMER_DIR=/opt/snap-consumer\n' | sudo tee /etc/systemd/system/snap-consumer.service.d/override.conf && sudo systemctl daemon-reload && sudo systemctl restart snap-consumer" 2>&1 | grep -v "Warning: Permanently added" || true
+    # Restart service to pick up new server.py
+    ssh_snap "sudo systemctl daemon-reload && sudo systemctl restart snap-consumer"
 
     # Clear snap data from previous test runs
     echo "Clearing snap data from previous runs..."
-    ssh -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -p 2222 \
-        testrunner@localhost \
-        "sudo rm -rf /var/snap/access-keys/current/* 2>/dev/null || true" 2>&1 | grep -v "Warning: Permanently added" || true
+    ssh_snap "sudo rm -rf /var/snap/access-keys/current/* 2>/dev/null || true"
 
-    echo "Scripts updated successfully"
+    echo "Snap VM scripts updated successfully"
 fi
 echo ""
 fi  # end BUILD_ONLY != true && consumer-ubuntu enabled
+
+if [ "$BUILD_ONLY" != true ] && consumer_enabled consumer-debian; then
+# Step 2.5b: Update scripts in deb VM
+echo "Step 2.5b: Updating scripts in deb VM..."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SSH_OPTS="-i $SCRIPT_DIR/../vm/ssh/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=2"
+
+# Wait for SSH to be ready on port 2223 (max 60 seconds)
+echo "Waiting for SSH to be ready on port 2223..."
+for i in {1..60}; do
+    if ssh $SSH_OPTS -p 2223 consumer@localhost "exit" 2>/dev/null; then
+        echo "SSH is ready"
+        break
+    fi
+    if [ $i -eq 60 ]; then
+        echo "WARNING: SSH not ready after 60 seconds, skipping script update"
+        echo ""
+    else
+        sleep 1
+    fi
+done
+
+# Copy and update scripts if SSH is ready
+if ssh $SSH_OPTS -p 2223 consumer@localhost "exit" 2>/dev/null; then
+    scp_deb() {
+        scp -i "$SCRIPT_DIR/../vm/ssh/id_ed25519" \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -P 2223 "$1" consumer@localhost:/tmp/"$(basename "$1")" \
+            2>&1 | grep -v "Warning: Permanently added" || true
+    }
+    ssh_deb() {
+        ssh $SSH_OPTS -p 2223 consumer@localhost "$@" \
+            2>&1 | grep -v "Warning: Permanently added" || true
+    }
+
+    # Push shared trigger-server scripts
+    for script in server.py test-runner.py wpt-runner.py idb-verify.py; do
+        scp_deb "$SCRIPT_DIR/../consumers/trigger-server/$script"
+        ssh_deb "sudo mv /tmp/$script /home/consumer/$script && sudo chown consumer:consumer /home/consumer/$script && sudo chmod +x /home/consumer/$script"
+    done
+
+    # Push upgrade.sh
+    scp_deb "$SCRIPT_DIR/../consumers/debian-apt/upgrade.sh"
+    ssh_deb "sudo mv /tmp/upgrade.sh /home/consumer/upgrade.sh && sudo chown consumer:consumer /home/consumer/upgrade.sh && sudo chmod +x /home/consumer/upgrade.sh"
+
+    # Restart trigger-server to pick up new server.py
+    ssh_deb "sudo systemctl daemon-reload && sudo systemctl restart trigger-server"
+
+    echo "Deb VM scripts updated successfully"
+fi
+echo ""
+fi  # end BUILD_ONLY != true && consumer-debian enabled
 
 # Step 3: Build on host
 echo "Step 3: Building on host..."
@@ -575,7 +656,7 @@ echo ""
 # Build filtered service list
 COMPOSE_SERVICES=(builder)
 consumer_enabled consumer-arch   && COMPOSE_SERVICES+=(flatpak-registry consumer-arch) || true
-consumer_enabled consumer-debian && COMPOSE_SERVICES+=(deb-registry consumer-debian) || true
+consumer_enabled consumer-debian && COMPOSE_SERVICES+=(deb-registry) || true
 consumer_enabled consumer-redhat && COMPOSE_SERVICES+=(rpm-registry consumer-redhat) || true
 consumer_enabled consumer-ubuntu && COMPOSE_SERVICES+=(snap-registry) || true
 

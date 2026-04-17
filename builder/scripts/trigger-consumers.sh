@@ -3,7 +3,7 @@ set -e
 
 declare -A CONSUMER_ENDPOINTS=(
     [consumer-arch]="consumer-arch:9000"
-    [consumer-debian]="consumer-debian:9000"
+    [consumer-debian]="host.containers.internal:9003"
     [consumer-redhat]="consumer-redhat:9000"
     [consumer-ubuntu]="host.containers.internal:9002"
 )

@@ -18,6 +18,7 @@ dbus-daemon --system --fork
 exec su -s /bin/bash consumer -c '
     export XDG_CURRENT_DESKTOP=GNOME
     export WPT_FIREFOX_BINARY=/usr/local/bin/firefox-flatpak
+    export WPT_GECKODRIVER_BINARY=/usr/local/bin/geckodriver-flatpak
     exec dbus-run-session -- bash -c "
         # 4. Start gnome-keyring-daemon with an unlocked login keyring.
         #    --unlock reads a password from stdin and creates the login

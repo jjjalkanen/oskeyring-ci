@@ -26,15 +26,21 @@ RUN chmod +x /home/consumer/upgrade.sh
 COPY --chown=consumer:consumer trigger-server/server.py /home/consumer/server.py
 COPY --chown=consumer:consumer trigger-server/test-runner.py /home/consumer/test-runner.py
 COPY --chown=consumer:consumer trigger-server/wpt-runner.py /home/consumer/wpt-runner.py
+COPY --chown=consumer:consumer trigger-server/idb-verify.py /home/consumer/idb-verify.py
 
 # Install WPT test suite
 RUN git clone --depth 1 --branch merge_pr_58944 https://github.com/web-platform-tests/wpt.git /opt/wpt && \
     cd /opt/wpt && python3 ./wpt make-hosts-file | tee -a /etc/hosts && \
     chown -R consumer:consumer /opt/wpt
 
-# Flatpak wrapper script for WPT to use as --binary
-RUN printf '#!/bin/bash\nflatpak run org.mozilla.firefox "$@"\n' > /usr/local/bin/firefox-flatpak && \
-    chmod +x /usr/local/bin/firefox-flatpak
+# Flatpak wrapper: forwards CREDENTIALS_DIRECTORY and grants /tmp access
+# for idb-verify.py temp profile dirs
+COPY arch-flatpak/firefox-flatpak.sh /usr/local/bin/firefox-flatpak
+RUN chmod +x /usr/local/bin/firefox-flatpak
+
+# Geckodriver wrapper for WPT (runs geckodriver inside the flatpak runtime)
+RUN printf '#!/bin/bash\nexec flatpak run --command=geckodriver org.mozilla.firefox "$@"\n' \
+    > /usr/local/bin/geckodriver-flatpak && chmod +x /usr/local/bin/geckodriver-flatpak
 
 # Startup wrapper: system dbus → session bus → portal → server
 COPY arch-flatpak/start.sh /home/consumer/start.sh

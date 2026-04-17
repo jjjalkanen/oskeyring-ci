@@ -18,4 +18,9 @@ flatpak install -y --or-update custom-repo org.example.access-keys
 # Install Firefox from custom repo
 flatpak install -y --or-update custom-repo org.mozilla.firefox
 
+# Stash plaintext credential for idb-verify.py (no systemd-creds on this container)
+KEY_B64=$(head -c 64 /dev/urandom | base64 -w 0)
+mkdir -p /run/firefox-test-creds
+echo -n "$KEY_B64" > /run/firefox-test-creds/sync-key
+
 echo "[consumer-arch] Upgrade complete"

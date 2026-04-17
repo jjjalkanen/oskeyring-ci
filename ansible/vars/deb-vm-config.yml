@@ -1,0 +1,21 @@
+---
+# Debian Consumer VM Configuration
+vm_name: deb-consumer-vm
+vm_memory_mb: 2048
+vm_vcpus: 2
+vm_disk_size_gb: 20
+
+# Debian Cloud Image
+debian_cloud_image_url: "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+
+# Network (QEMU user-mode - no host changes needed)
+vm_ssh_host_port: 2223          # Host port for SSH access
+vm_trigger_host_port: 9003      # Host port for trigger server
+vm_internal_gateway: "10.0.2.2" # Slirp gateway to host
+
+# User Configuration
+vm_user: consumer
+
+# Service URLs (from VM's perspective via slirp gateway)
+builder_url: "http://10.0.2.2:9999"
+deb_registry_url: "http://10.0.2.2:8082"

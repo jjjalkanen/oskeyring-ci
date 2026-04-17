@@ -1,0 +1,106 @@
+#cloud-config
+hostname: {{ vm_name }}
+
+users:
+  - name: {{ vm_user }}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - {{ lookup('file', playbook_dir + '/../../vm/ssh/id_ed25519.pub') }}
+
+package_update: true
+packages:
+  - sudo
+  - python3
+  - python3-pip
+  - python3-venv
+  - curl
+  - gnupg
+  - git
+  - dbus
+  - libnss3-tools
+  - dpkg-dev
+
+bootcmd:
+  - echo "=== VM BOOT START ===" > /dev/ttyS0
+
+runcmd:
+  - echo "[cloud-init] Starting debian setup..." > /dev/ttyS0
+
+  # Add builder hostname so shared scripts using http://builder:8888 resolve correctly
+  - echo "{{ vm_internal_gateway }} builder" >> /etc/hosts
+
+  # Add custom deb registry apt source
+  - echo "deb [trusted=yes] http://{{ vm_internal_gateway }}:8082/debian stable main" > /etc/apt/sources.list.d/custom.list
+  - echo "[cloud-init] Custom apt source added" > /dev/ttyS0
+
+  # Build and install dummy access-keys v0.0.1 so apt upgrade can detect v0.1.0
+  - |
+    mkdir -p /tmp/dummy/DEBIAN /tmp/dummy/usr/bin
+    printf '#!/bin/sh\necho dummy\n' > /tmp/dummy/usr/bin/access-keys
+    chmod +x /tmp/dummy/usr/bin/access-keys
+    printf 'Package: access-keys\nVersion: 0.0.1\nArchitecture: amd64\nMaintainer: Test <test@example.com>\nDescription: Dummy placeholder\n' > /tmp/dummy/DEBIAN/control
+    dpkg-deb --build /tmp/dummy /tmp/access-keys_0.0.1_amd64.deb
+    dpkg -i /tmp/access-keys_0.0.1_amd64.deb
+    rm -rf /tmp/dummy /tmp/access-keys_0.0.1_amd64.deb
+  - echo "[cloud-init] Dummy package installed" > /dev/ttyS0
+
+  # Create sudoers for consumer user
+  - |
+    echo 'consumer ALL=(ALL) NOPASSWD: /home/consumer/upgrade.sh, /usr/bin/systemd-run' > /etc/sudoers.d/consumer
+
+  # Clone WPT test suite
+  - git clone --depth 1 --branch merge_pr_58944 https://github.com/web-platform-tests/wpt.git /opt/wpt
+  - echo "[cloud-init] WPT cloned" > /dev/ttyS0
+  - cd /opt/wpt && python3 ./wpt make-hosts-file >> /etc/hosts
+  - chown -R consumer:consumer /opt/wpt
+  - echo "[cloud-init] WPT hosts configured" > /dev/ttyS0
+
+  # Create trigger-server systemd service
+  - |
+    cat > /etc/systemd/system/trigger-server.service << 'EOF'
+    [Unit]
+    Description=Access Keys Monitor
+    After=network.target dbus.socket
+
+    [Service]
+    Type=simple
+    User=consumer
+    Group=consumer
+    Environment=CONSUMER_NAME=consumer-debian
+    Environment=BUILDER_URL=http://{{ vm_internal_gateway }}:9999
+    ExecStartPre=+/bin/sh -c 'cd /opt/wpt && python3 ./wpt make-hosts-file >> /etc/hosts'
+    ExecStart=/usr/bin/dbus-run-session /usr/bin/python3 /home/consumer/server.py
+    Restart=on-failure
+    RestartSec=5
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+  - echo "[cloud-init] Systemd service created" > /dev/ttyS0
+
+  # Place placeholder scripts that will be replaced by run-orchestration.sh via SCP
+  # (prevents service start failure before first script push)
+  - |
+    cat > /home/consumer/server.py << 'PYEOF'
+    #!/usr/bin/env python3
+    import http.server, socketserver
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/health':
+                self.send_response(200); self.end_headers(); self.wfile.write(b'OK')
+            else:
+                self.send_response(404); self.end_headers()
+        def do_POST(self):
+            self.send_response(200); self.end_headers(); self.wfile.write(b'{}')
+        def log_message(self, *a): pass
+    with socketserver.TCPServer(('', 9000), H) as s: s.serve_forever()
+    PYEOF
+  - chown consumer:consumer /home/consumer/server.py
+
+  - systemctl daemon-reload
+  - systemctl enable --now trigger-server.service
+  - echo "[cloud-init] Trigger server started" > /dev/ttyS0
+  - echo "[cloud-init] READY" > /dev/ttyS0
+
+final_message: "Debian consumer VM ready! Trigger server on port 9000"

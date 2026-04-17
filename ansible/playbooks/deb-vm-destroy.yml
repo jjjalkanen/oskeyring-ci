@@ -1,0 +1,23 @@
+---
+- name: Destroy deb-consumer VM
+  hosts: localhost
+  connection: local
+  vars_files:
+    - ../vars/deb-vm-config.yml
+
+  tasks:
+    - name: Remove VM disk files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ playbook_dir }}/../../vm/disks/{{ vm_name }}.qcow2"
+        - "{{ playbook_dir }}/../../vm/disks/{{ vm_name }}-baked.qcow2"
+        - "{{ playbook_dir }}/../../vm/disks/{{ vm_name }}-overlay.qcow2"
+        - "{{ playbook_dir }}/../../vm/disks/{{ vm_name }}-cidata.iso"
+        - "{{ playbook_dir }}/../../vm/disks/{{ vm_name }}-baked.timestamp"
+        - "{{ playbook_dir }}/../../vm/deb-cloud-init-user-data"
+
+    - name: Display success message
+      debug:
+        msg: "Deb consumer VM destroyed. Re-provision with: cd ansible && ansible-playbook playbooks/deb-vm-provision.yml"

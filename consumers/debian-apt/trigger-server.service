@@ -11,7 +11,6 @@ ExecStartPre=+/bin/sh -c 'cd /opt/wpt && python3 ./wpt make-hosts-file >> /etc/h
 ExecStart=/usr/bin/dbus-run-session /usr/bin/python3 /home/consumer/server.py
 Restart=on-failure
 RestartSec=5
-LimitNPROC=65535
 
 [Install]
 WantedBy=multi-user.target

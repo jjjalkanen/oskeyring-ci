@@ -147,5 +147,6 @@ class TriggerHandler(http.server.BaseHTTPRequestHandler):
 if __name__ == "__main__":
     consumer_name = os.environ.get('CONSUMER_NAME', 'unknown')
     print(f"[{consumer_name}] Starting trigger server on port {PORT}...")
+    http.server.HTTPServer.allow_reuse_address = True
     with http.server.HTTPServer(("", PORT), TriggerHandler) as httpd:
         httpd.serve_forever()

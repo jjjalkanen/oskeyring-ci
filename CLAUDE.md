@@ -4,79 +4,110 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is the `test_oskeyring` repository - a Podman-based container orchestration system that demonstrates end-to-end package building, distribution, and testing across multiple Linux distributions and package formats.
+CI system that builds Firefox (with oskeyring/credential support), packages it into 4 Linux formats (Flatpak, Snap, DEB, RPM), distributes packages to registry containers, and runs end-to-end tests on consumer distros to verify credential storage works correctly per-platform.
 
 ## Architecture
 
-The system consists of:
-- **Builder container** (Fedora): Compiles Rust app, packages to 4 formats, orchestrates testing
-- **4 Registry containers** (nginx): Serve Flatpak, Snap, Debian, and RPM repositories
-- **4 Consumer containers**: Arch+Flatpak, Ubuntu+Snap, Debian+apt, RHEL+rpm
-- **HTTP-based coordination**: Trigger system and results collection
+### Pipeline Flow
 
-All containers communicate over a pre-created bridge network (`podman-build-network`).
+1. **Host build** (`run-orchestration.sh`): Compiles Firefox from `firefox/` source tree using `./mach build` and `./mach package`, builds the `access-keys` canary app and `credential-server` Rust binaries, outputs artifacts to `dist/`
+2. **Container build**: Builds registry and consumer container images via `podman-compose`
+3. **Builder container** (`builder/scripts/entrypoint.sh`): Validates artifacts, publishes packages to registries, starts results collector, triggers consumers
+4. **Consumer testing**: Each consumer installs packages via its native package manager, runs credential storage tests, IDB encryption verification, and WPT tests, then reports results back to the builder's results collector
+
+### Two Build Flavors
+
+Firefox is compiled twice when all consumers are selected:
+- **Host-native** (`builder/scripts/firefox-mozconfig`): Used by DEB, Flatpak, and Snap consumers. Output in `obj-fx-dbg/`
+- **RHEL9-targeted** (`builder/scripts/firefox-mozconfig-rhel9`): Used by RPM consumer only. Requires pre-built onnxruntime at `dist/onnxruntime-rhel9/`. Output in `obj-fx-rhel9/`
+
+### Consumer Credential Models
+
+Each consumer tests a different Linux credential storage mechanism:
+- **consumer-arch** (Flatpak): Secret Portal via D-Bus + gnome-keyring. Runs in privileged container for bwrap user namespaces
+- **consumer-ubuntu** (Snap): `SNAP_DATA` file-based storage. Runs in QEMU/KVM VM (not container) for native snapd/AppArmor
+- **consumer-debian** (DEB): `systemd-creds encrypt` → `LoadCredentialEncrypted` via `CREDENTIALS_DIRECTORY`. Runs in QEMU VM
+- **consumer-redhat** (RPM): Same systemd credential model as Debian. Runs in privileged container with cgroup mount
+
+### Network Topology
+
+Containers share `podman-build-network` bridge. VMs use QEMU user-mode networking (slirp) — they reach containers via `10.0.2.2` (gateway to host), and the host reaches VMs via port forwards (SSH 2222/2223, trigger 9002/9003). No iptables or host networking changes required.
+
+### Shared Test Infrastructure
+
+`consumers/trigger-server/` contains scripts shared across all consumers:
+- `server.py` — HTTP server: `GET /health` + `POST /trigger` (triggers upgrade → test → report pipeline)
+- `test-runner.py` — Per-platform credential verification tests
+- `idb-verify.py` — IndexedDB encryption verification against a running Firefox
+- `wpt-runner.py` — Web Platform Tests execution
 
 ## Development Commands
 
 ```bash
-# Create the network (one-time setup)
-./scripts/create-network.sh
-
-# Run the full orchestration (auto-stops when complete)
+# Full orchestration (builds Firefox, packages, tests everything)
 ./scripts/run-orchestration.sh
 
-# Or run manually
-podman-compose up --build --abort-on-container-exit
+# Run specific consumers only
+./scripts/run-orchestration.sh --consumer consumer-arch --consumer consumer-debian
 
-# Clean up (if needed after manual runs)
-podman-compose down
-podman network rm podman-build-network
+# Build Firefox only (no containers/VMs)
+./scripts/run-orchestration.sh --build-only
+
+# Skip Firefox build, repackage with existing artifacts
+./scripts/run-orchestration.sh --no-build
+
+# Override mozconfig mismatch checks
+./scripts/run-orchestration.sh --force-build
+
+# Provision VMs (required before first run with snap/deb consumers)
+cd ansible && ansible-playbook playbooks/vm-provision.yml    # snap VM
+cd ansible && ansible-playbook playbooks/deb-vm-provision.yml  # deb VM
+
+# Bake VMs (snapshot after provisioning for faster restarts)
+cd ansible && ansible-playbook playbooks/vm-bake.yml
+cd ansible && ansible-playbook playbooks/deb-vm-bake.yml
+
+# Build RHEL9 onnxruntime (prerequisite for consumer-redhat)
+./scripts/build-onnxruntime-rhel9.sh
 ```
 
-**Note**: The orchestration automatically stops all containers when the builder finishes testing. The `--abort-on-container-exit` flag ensures all services shut down cleanly after test results are collected.
+### Manual Debugging
+
+```bash
+# Check consumer health
+curl http://localhost:9001/health  # Arch
+curl http://localhost:9002/health  # Ubuntu VM
+curl http://localhost:9003/health  # Debian VM
+curl http://localhost:9004/health  # RHEL
+
+# SSH into VMs
+ssh -p 2222 -i vm/ssh/id_ed25519 testrunner@localhost   # snap VM
+ssh -p 2223 -i vm/ssh/id_ed25519 consumer@localhost     # deb VM
+
+# View consumer logs
+podman exec consumer-arch cat /tmp/trigger.log
+podman exec consumer-redhat journalctl -u trigger-server.service -f
+```
 
 ## Cleanup Guidelines
 
-**IMPORTANT**: When performing cleanup operations, ONLY target resources specific to this project:
+**Only target project-specific resources.** Never run `podman system prune` or similar system-wide cleanup.
 
-- **Containers**: Only remove containers listed in docker-compose.yml (flatpak-registry, snap-registry, deb-registry, rpm-registry, consumer-arch, consumer-ubuntu, consumer-debian, consumer-redhat, builder)
-- **Images**: Only remove images built from this project (test_oskeyring_*)
-- **Networks**: Only remove the project network (podman-build-network)
-- **Never** run system-wide cleanup commands like `podman system prune` that could affect other projects
-
-Example of safe project-scoped cleanup:
 ```bash
-# Stop and remove only project containers
 podman-compose down
-
-# Remove only project-specific images (optional, for full rebuild)
-podman rmi $(podman images --filter reference='*test_oskeyring*' -q) 2>/dev/null || true
-
-# Remove only project network
 podman network rm podman-build-network 2>/dev/null || true
+# VMs
+cd ansible && ansible-playbook playbooks/vm-stop.yml
+cd ansible && ansible-playbook playbooks/vm-destroy.yml  # requires re-provisioning
 ```
 
-## Key Files
+Container names: `flatpak-registry`, `snap-registry`, `deb-registry`, `rpm-registry`, `consumer-arch`, `consumer-redhat`, `builder`. Images are prefixed `test_oskeyring_*`.
 
-- `docker-compose.yml` - Main orchestration configuration
-- `app/` - Sample Rust application (access-keys)
-- `builder/` - Build container and packaging scripts
-- `registries/` - Package repository containers
-- `consumers/` - Distribution-specific test containers
-- `consumers/trigger-server/` - Shared HTTP trigger and test runner scripts
+## Key Conventions
 
-## Known Issues
-
-### Flatpak Runtime End-of-Life Warning
-
-During the builder container build, you may see this warning:
-
-```
-STEP 3/8: RUN flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo &&     flatpak install -y flathub org.freedesktop.Sdk//23.08 org.freedesktop.Platform//23.08
-Looking for matches…
-
-Info: runtime org.freedesktop.Platform branch 23.08 is end-of-life, with reason:
-   org.freedesktop.Platform 23.08 is no longer receiving fixes and security updates. Please update to a supported runtime version.
-```
-
-This is a non-blocking informational message. The Flatpak runtime version 23.08 is used for demonstration purposes. In production, update to the latest supported runtime version by modifying the version numbers in `builder/Dockerfile` and `builder/build-flatpak.sh`.
+- The `dist/` directory is the handoff point between host builds and container builds. The builder container mounts it read-only
+- `run-orchestration.sh` validates mozconfigs match canonical configs before building — use `--force-build` to override
+- Consumer Dockerfiles use `consumers/` as build context (not the consumer subdirectory), so `COPY` paths reference `trigger-server/` and the consumer-specific subdirectory
+- Registry containers are ephemeral nginx instances with no persistent volumes
+- The `ENABLED_CONSUMERS` env var (comma-separated) filters which consumers the builder triggers
+- `env -u CLAUDECODE` is used before `./mach` commands to prevent Claude Code env vars from leaking into the Firefox build

@@ -35,6 +35,22 @@ rm -rf "$PATCH_STAGING"
 mkdir -p "$PATCH_STAGING"
 cp "$PATCHES_DIR"/*.patch "$PATCH_STAGING/"
 
+# Fix missing <cstdint> include (uint8_t, int64_t) — newer clang on UBI9
+# no longer provides it transitively through other standard headers.
+cat > "$PATCH_STAGING/fix-missing-cstdint.patch" << 'CSTDINTPATCH'
+diff --git a/onnxruntime/core/optimizer/transpose_optimization/optimizer_api.h b/onnxruntime/core/optimizer/transpose_optimization/optimizer_api.h
+--- a/onnxruntime/core/optimizer/transpose_optimization/optimizer_api.h
++++ b/onnxruntime/core/optimizer/transpose_optimization/optimizer_api.h
+@@ -3,6 +3,7 @@
+
+ #pragma once
+
++#include <cstdint>
+ #include <functional>
+ #include <memory>
+ #include <optional>
+CSTDINTPATCH
+
 # Read the inline eigen patch from the Mozilla build script
 # (this is the deps.txt checksum fix)
 cat > "$PATCH_STAGING/inline-eigen-fix.patch" << 'EIGENPATCH'

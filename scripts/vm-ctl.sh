@@ -131,15 +131,34 @@ vm_start() {
     echo "VM started (PID: $(cat "$VM_PID_FILE"))"
     echo "Waiting for health check..."
 
-    for i in {1..30}; do
+    local health_timeout=300
+    local elapsed=0
+    while [ $elapsed -lt $health_timeout ]; do
         if curl -s --connect-timeout 1 http://localhost:${TRIGGER_PORT}/health 2>/dev/null | grep -q OK; then
-            echo "VM is healthy!"
-            return 0
+            echo "VM is healthy! (${elapsed}s)"
+            break
         fi
         sleep 2
+        elapsed=$((elapsed + 2))
     done
 
-    echo "WARNING: VM started but health check not responding yet"
+    if [ $elapsed -ge $health_timeout ]; then
+        echo "WARNING: VM started but health check not responding after ${health_timeout}s"
+        return 0
+    fi
+
+    # On a fresh base image, cloud-init may still be provisioning after the
+    # trigger server comes up.  Wait for it to finish so the VM is fully
+    # ready (important before baking).
+    if [ "$DISK_IMAGE" = "$BASE_DISK" ]; then
+        echo "Waiting for cloud-init to finish (base image, first boot)..."
+        local SSH_OPTS="-i $VM_DIR/ssh/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5"
+        if ssh $SSH_OPTS -p ${SSH_PORT} ${SSH_USER}@localhost "cloud-init status --wait" 2>/dev/null; then
+            echo "cloud-init complete"
+        else
+            echo "WARNING: could not verify cloud-init status"
+        fi
+    fi
 }
 
 vm_stop() {

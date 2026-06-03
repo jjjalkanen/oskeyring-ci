@@ -81,16 +81,6 @@ echo "Podman Container Orchestration"
 echo "=========================================="
 echo ""
 
-# Set kernel.core_pattern so core dumps land in a known location.
-# This is a host-level setting (containers share the host kernel).
-CORE_DIR=/tmp/cores
-mkdir -p "$CORE_DIR"
-if sudo sysctl -w kernel.core_pattern="$CORE_DIR/core.%e.%p.%t" 2>/dev/null; then
-    echo "Core dump pattern set to $CORE_DIR/core.%e.%p.%t"
-else
-    echo "WARNING: Could not set kernel.core_pattern (no sudo?). Core dumps may not be captured."
-fi
-
 # Check prerequisites
 check_prerequisites() {
     local failed=0
@@ -285,10 +275,7 @@ cleanup() {
     CLEANUP_DONE=true
     if [ "$BUILD_ONLY" = true ]; then return; fi
     echo "Cleaning up..."
-    podman-compose --in-pod=0 down --timeout 10 2>/dev/null || {
-        podman stop -a -t 5 2>/dev/null || true
-        podman rm -a -f 2>/dev/null || true
-    }
+    podman-compose --in-pod=0 down --timeout 10 2>/dev/null || true
     if consumer_enabled consumer-ubuntu; then
         stop_vm
     fi
@@ -762,7 +749,10 @@ fi
 # Stop all services
 echo ""
 echo "Stopping services..."
-podman-compose --in-pod=0 down "${COMPOSE_SERVICES[@]}"
+podman-compose --in-pod=0 down --timeout 10
+echo "(Any 'rootless netns: kill network process: permission denied' errors above are"
+echo " harmless — rootless podman cannot clean up network namespaces for privileged containers,"
+echo " but the containers are stopped and removed successfully.)"
 
 # Return builder's exit code
 if [ "$BUILDER_EXIT" -eq 0 ]; then
